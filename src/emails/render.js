@@ -44,16 +44,15 @@ function resolveLogoSrc(logoUrl) {
 const TEMPLATES_DIR = path.join(__dirname, 'templates');
 const LAYOUT_PATH = path.join(__dirname, 'layout.html');
 
-// Paleta padrão navy Eterniza — usada quando NÃO há tenant (reproduz o visual atual).
+// Paleta padrão navy Eterniza — usada quando NÃO há tenant.
+// Tema CLARO (card branco, texto escuro): só a FAIXA do cabeçalho e os botões
+// usam a cor de acento; o corpo é neutro e legível em qualquer cliente de e-mail.
 const DEFAULT_ACCENT = {
-  accent: '#032e59',
-  accent_bright: '#0a4a8c',
-  accent_deep: '#021a33', // fundo mais escuro (body + fim do gradiente)
-  accent_mid: '#0b3358', // boxes internos (caixa do OTP, valores...)
-  accent_border: '#1a4e82', // bordas de boxes/rodapé
-  accent_glow: 'rgba(60, 130, 200, 0.28)', // brilho radial superior
-  accent_glow_soft: 'rgba(120, 180, 235, 0.22)', // glow flutuante à esquerda
-  accent_shadow: 'rgba(2, 16, 34, 0.85)', // sombra radial inferior (profundidade)
+  accent: '#032e59', // faixa do cabeçalho + botões (cor da marca/cidade)
+  accent_dark: '#021d3a', // fim do gradiente do cabeçalho
+  accent_ink: '#0a3663', // títulos e valores (versão escura, legível no branco)
+  accent_soft: '#eef3f9', // fundo dos boxes internos (tom bem claro da marca)
+  accent_border: '#d8e2ee', // borda dos boxes internos
 };
 
 // cache dos arquivos em memória (lidos uma vez)
@@ -102,20 +101,17 @@ function rgba(hex, alpha = 1) {
   return `rgba(${c.r}, ${c.g}, ${c.b}, ${alpha})`;
 }
 
-// deriva a PALETA COMPLETA de acento a partir da cor primária do tenant (ou navy padrão)
+// deriva a PALETA de acento (tema claro) a partir da cor primária do tenant (ou navy padrão).
+// Só cabeçalho e botões recebem a cor; o resto é neutro para máxima legibilidade.
 function accentFromTenant(tenant) {
   if (!tenant || !tenant.primaryColor) return { ...DEFAULT_ACCENT };
   const accent = tenant.primaryColor;
-  const bright = tenant.secondaryColor || lighten(accent, 0.32); // secundária, ou clareado da primária
   return {
-    accent,
-    accent_bright: bright,
-    accent_deep: darken(accent, 0.45), // fundo MAIS escuro (body + fim do gradiente)
-    accent_mid: darken(accent, 0.72), // boxes internos (caixa do OTP, valores...)
-    accent_border: lighten(accent, 0.16), // bordas de boxes/rodapé (levemente clareado)
-    accent_glow: rgba(lighten(bright, 0.25), 0.3), // brilho radial superior
-    accent_glow_soft: rgba(lighten(bright, 0.4), 0.22), // glow flutuante à esquerda
-    accent_shadow: rgba(darken(accent, 0.25), 0.85), // sombra radial inferior (profundidade)
+    accent, // faixa do cabeçalho + botões
+    accent_dark: darken(accent, 0.7), // fim do gradiente do cabeçalho
+    accent_ink: darken(accent, 0.72), // títulos/valores escuros e legíveis no branco
+    accent_soft: lighten(accent, 0.9), // fundo dos boxes (tom bem claro da marca)
+    accent_border: lighten(accent, 0.74), // borda dos boxes
   };
 }
 

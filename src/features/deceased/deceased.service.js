@@ -49,6 +49,10 @@ function buildListWhere(query) {
       { cpf: { [Op.iLike]: `%${query.search}%` } },
     ];
   }
+  // Filtros dedicados (§ busca avançada do cliente).
+  if (query.fullName) where.fullName = { [Op.iLike]: `%${query.fullName}%` };
+  if (query.cpf) where.cpf = { [Op.iLike]: `%${query.cpf}%` };
+  if (query.motherName) where.motherName = { [Op.iLike]: `%${query.motherName}%` };
   if (query.deathFrom || query.deathTo) {
     where.deathDate = {};
     if (query.deathFrom) where.deathDate[Op.gte] = query.deathFrom;
@@ -123,18 +127,30 @@ async function list(tenantId, query) {
   const { page, perPage, limit, offset } = getPagination(query, { defaultPerPage: 30 });
   const where = { tenantId, ...buildListWhere(query) };
 
-  // Filtro por quadra: restringe pelo jazigo atual (belongsTo — não multiplica linhas).
+  // Filtros pelo JAZIGO ATUAL (quadra/rua/lote/código) — belongsTo, não multiplica
+  // linhas. `graveCode` cobre "gaveta"/"matrícula" (código da unidade, ex.: M2/12B).
   const graveInc = { ...currentGraveInclude };
-  if (query.blockId || query.cemeteryId) {
+  const hasGraveFilter =
+    query.blockId || query.streetId || query.lotId || query.cemeteryId || query.graveCode;
+  if (hasGraveFilter) {
+    const graveWhere = {};
+    if (query.cemeteryId) graveWhere.cemeteryId = query.cemeteryId;
+    if (query.graveCode) graveWhere.code = { [Op.iLike]: `%${query.graveCode}%` };
     const lotWhere = {};
+    if (query.lotId) lotWhere.id = query.lotId;
     const streetInc = { model: Street, as: 'street', include: [{ model: Block, as: 'block' }] };
+    if (query.streetId) { streetInc.where = { id: query.streetId }; streetInc.required = true; }
     if (query.blockId) {
       streetInc.required = true;
       streetInc.include = [{ model: Block, as: 'block', where: { id: query.blockId }, required: true }];
     }
+    const lotRequired = Boolean(query.blockId || query.streetId || query.lotId);
     graveInc.required = true;
-    graveInc.where = query.cemeteryId ? { cemeteryId: query.cemeteryId } : undefined;
-    graveInc.include = [{ model: GraveStatus, as: 'status' }, { model: Lot, as: 'lot', where: lotWhere, required: Boolean(query.blockId), include: [streetInc] }];
+    graveInc.where = Object.keys(graveWhere).length ? graveWhere : undefined;
+    graveInc.include = [
+      { model: GraveStatus, as: 'status' },
+      { model: Lot, as: 'lot', where: Object.keys(lotWhere).length ? lotWhere : undefined, required: lotRequired, include: [streetInc] },
+    ];
   }
 
   const { rows, count } = await Deceased.findAndCountAll({

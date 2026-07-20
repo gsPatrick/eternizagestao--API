@@ -43,10 +43,13 @@ async function login({ email, password, tenant }) {
     where: { email, active: true },
   });
 
-  // prioriza usuário do tenant resolvido; fallback para usuário de plataforma
+  // prioriza usuário do tenant resolvido; sem tenant → super_admin (plataforma)
+  // ou, se o e-mail for único, o admin da cidade dono desse e-mail (token
+  // carrega o tenantId dele). E-mail ambíguo sem tenant → null (INVALID_CREDENTIALS).
   const user =
-    (tenant && candidates.find((u) => u.tenantId === tenant.id)) ||
-    candidates.find((u) => u.tenantId === null);
+    (tenant && candidates.find((u) => u.tenantId === tenant.id)) || // subdomínio/header
+    candidates.find((u) => u.tenantId === null) || // super_admin
+    (candidates.length === 1 ? candidates[0] : null); // admin de cidade único por e-mail
 
   if (!user || !(await comparePassword(password, user.passwordHash))) {
     throw AppError.unauthorized('E-mail ou senha inválidos.', 'INVALID_CREDENTIALS');

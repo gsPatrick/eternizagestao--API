@@ -3,6 +3,7 @@
 const crypto = require('crypto');
 const { Op, fn, col, literal } = require('sequelize');
 const AppError = require('../../utils/app-error');
+const storage = require('../../providers/storage');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const { randomToken } = require('../../utils/password');
 const { portalActivationUrl } = require('../../utils/tenant-url');
@@ -10,6 +11,18 @@ const {
   Person, PersonRelationship, Concession, Grave,
   FamilyPortalAccount, MaintenanceFee, Tenant,
 } = require('../../models');
+
+// Foto da pessoa: aceita PNG/JPEG/WEBP; teto de 5 MB (foto de perfil).
+const PHOTO_MIME_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+const PHOTO_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
+
+// TTL longo (7 dias) da URL assinada da foto devolvida ao painel via <img>.
+const PHOTO_URL_TTL_SECONDS = Number(process.env.PHOTO_URL_TTL_SECONDS || 7 * 24 * 3600);
+
+// Assina o photoUrl LOCAL (/files/...) p/ exibição via <img>; externo/vazio passa intacto.
+function signPhoto(photoUrl) {
+  return photoUrl ? storage.signedUrl(photoUrl, { ttlSeconds: PHOTO_URL_TTL_SECONDS }) : photoUrl;
+}
 
 // Contrato externo (feature `notifications`) — require defensivo para não
 // derrubar o módulo caso a dependência ainda não esteja disponível.
@@ -143,6 +156,8 @@ async function annotate(tenantId, people) {
     if (familiarSet.has(p.id)) roles.push('familiar');
     return {
       ...json,
+      // photoUrl assinado (só se local /files/...) — a <img> do painel não manda Bearer.
+      photoUrl: signPhoto(json.photoUrl),
       roles,
       concessionsCount,
       portal: portalSummary(account),
@@ -206,6 +221,7 @@ async function getById(tenantId, id) {
   if (!person) throw AppError.notFound('Pessoa não encontrada.');
   const json = person.toJSON();
   json.portal = portalSummary(person.portalAccount);
+  json.photoUrl = signPhoto(json.photoUrl); // assinado (só se local /files/...)
   return json;
 }
 
@@ -293,8 +309,43 @@ async function revokePortal(tenantId, personId) {
   return { id: account.id, personId, email: account.email, status: account.status };
 }
 
+/**
+ * Upload da FOTO da pessoa (base64). Valida tipo/tamanho, persiste via storage
+ * (servido em /files/...), grava person.photoUrl (fileUrl estável) e devolve
+ * { photoUrl } ASSINADO p/ exibição imediata via <img>. Espelha tenants.uploadLogo.
+ */
+async function uploadPhoto(tenantId, id, { contentBase64, fileName, mimeType } = {}) {
+  const person = await Person.findOne({ where: { id, tenantId } });
+  if (!person) throw AppError.notFound('Pessoa não encontrada.');
+
+  if (!contentBase64) {
+    throw AppError.badRequest('Envie o arquivo da foto (contentBase64).', 'MISSING_FILE');
+  }
+  const mime = String(mimeType || '').toLowerCase();
+  if (!PHOTO_MIME_TYPES.includes(mime)) {
+    throw AppError.badRequest('Formato inválido. Envie uma imagem PNG, JPEG ou WEBP.', 'INVALID_IMAGE_TYPE');
+  }
+  const buffer = Buffer.from(contentBase64, 'base64');
+  if (!buffer.length) {
+    throw AppError.badRequest('Arquivo de foto vazio ou inválido.', 'INVALID_FILE');
+  }
+  if (buffer.length > PHOTO_MAX_BYTES) {
+    throw AppError.badRequest('Imagem muito grande. O limite é 5 MB.', 'FILE_TOO_LARGE');
+  }
+
+  const saved = await storage.saveFile({
+    tenantId,
+    fileName: fileName || 'foto.png',
+    content: buffer,
+    mimeType: mime,
+  });
+
+  await person.update({ photoUrl: saved.fileUrl });
+  return { photoUrl: signPhoto(saved.fileUrl) };
+}
+
 module.exports = {
   list, summary, getById, create, update, remove,
-  addRelationship, removeRelationship, invitePortal, revokePortal,
+  addRelationship, removeRelationship, invitePortal, revokePortal, uploadPhoto,
   EDITABLE_FIELDS,
 };

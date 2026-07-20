@@ -33,4 +33,11 @@ const remove = catchAsync(async (req, res) => {
   return noContent(res);
 });
 
-module.exports = { list, locationCounts, getById, create, update, remove };
+// POST /v1/deceased/:id/photo — upload da foto (base64). Body: { contentBase64, fileName, mimeType }
+const uploadPhoto = catchAsync(async (req, res) => {
+  requireFields(req.body, ['contentBase64', 'mimeType']);
+  const data = pick(req.body, ['contentBase64', 'fileName', 'mimeType']);
+  return ok(res, await service.uploadPhoto(getTenantId(req), req.params.id, data));
+});
+
+module.exports = { list, locationCounts, getById, create, update, remove, uploadPhoto };

@@ -2,11 +2,24 @@
 
 const { Op } = require('sequelize');
 const AppError = require('../../utils/app-error');
+const storage = require('../../providers/storage');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const {
   sequelize, Deceased, Burial, Grave, GraveStatus, Lot, Street, Block,
   Exhumation, RemainsDeposit, OssuaryNiche, Ossuary, Concession, Person,
 } = require('../../models');
+
+// Foto do sepultado: aceita PNG/JPEG/WEBP; teto de 5 MB (foto de perfil).
+const PHOTO_MIME_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+const PHOTO_MAX_BYTES = 5 * 1024 * 1024; // 5 MB
+
+// TTL longo (7 dias) da URL assinada da foto devolvida ao painel via <img>.
+const PHOTO_URL_TTL_SECONDS = Number(process.env.PHOTO_URL_TTL_SECONDS || 7 * 24 * 3600);
+
+// Assina o photoUrl LOCAL (/files/...) p/ exibição via <img>; externo/vazio passa intacto.
+function signPhoto(photoUrl) {
+  return photoUrl ? storage.signedUrl(photoUrl, { ttlSeconds: PHOTO_URL_TTL_SECONDS }) : photoUrl;
+}
 
 // hierarquia física completa do jazigo atual (para exibir a "localização exata").
 // parentGrave (belongsTo) permite montar "JAZIGO · GAVETA" sem multiplicar linhas.
@@ -98,7 +111,10 @@ async function attachResponsible(tenantId, rows) {
 
   return rows.map((r) => {
     const responsible = (r.currentGraveId && byGrave.get(r.currentGraveId)) || byDeceased.get(r.id) || null;
-    return { ...r.toJSON(), responsible, lastBurialDate: lastBurialByDeceased.get(r.id) || null };
+    const json = r.toJSON();
+    // photoUrl assinado (só se local /files/...) — a <img> do painel não manda Bearer.
+    json.photoUrl = signPhoto(json.photoUrl);
+    return { ...json, responsible, lastBurialDate: lastBurialByDeceased.get(r.id) || null };
   });
 }
 
@@ -195,4 +211,39 @@ async function remove(tenantId, id) {
   await deceased.destroy(); // soft delete
 }
 
-module.exports = { list, locationCounts, getById, create, update, remove, EDITABLE_FIELDS };
+/**
+ * Upload da FOTO do sepultado (base64). Valida tipo/tamanho, persiste via storage
+ * (servido em /files/...), grava deceased.photoUrl (fileUrl estável) e devolve
+ * { photoUrl } ASSINADO p/ exibição imediata via <img>. Espelha tenants.uploadLogo.
+ */
+async function uploadPhoto(tenantId, id, { contentBase64, fileName, mimeType } = {}) {
+  const deceased = await Deceased.findOne({ where: { id, tenantId } });
+  if (!deceased) throw AppError.notFound('Sepultado não encontrado.');
+
+  if (!contentBase64) {
+    throw AppError.badRequest('Envie o arquivo da foto (contentBase64).', 'MISSING_FILE');
+  }
+  const mime = String(mimeType || '').toLowerCase();
+  if (!PHOTO_MIME_TYPES.includes(mime)) {
+    throw AppError.badRequest('Formato inválido. Envie uma imagem PNG, JPEG ou WEBP.', 'INVALID_IMAGE_TYPE');
+  }
+  const buffer = Buffer.from(contentBase64, 'base64');
+  if (!buffer.length) {
+    throw AppError.badRequest('Arquivo de foto vazio ou inválido.', 'INVALID_FILE');
+  }
+  if (buffer.length > PHOTO_MAX_BYTES) {
+    throw AppError.badRequest('Imagem muito grande. O limite é 5 MB.', 'FILE_TOO_LARGE');
+  }
+
+  const saved = await storage.saveFile({
+    tenantId,
+    fileName: fileName || 'foto.png',
+    content: buffer,
+    mimeType: mime,
+  });
+
+  await deceased.update({ photoUrl: saved.fileUrl });
+  return { photoUrl: signPhoto(saved.fileUrl) };
+}
+
+module.exports = { list, locationCounts, getById, create, update, remove, uploadPhoto, EDITABLE_FIELDS };

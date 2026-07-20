@@ -53,7 +53,14 @@ const revokePortal = catchAsync(async (req, res) => {
   return ok(res, await service.revokePortal(getTenantId(req), req.params.id));
 });
 
+// POST /v1/people/:id/photo — upload da foto (base64). Body: { contentBase64, fileName, mimeType }
+const uploadPhoto = catchAsync(async (req, res) => {
+  requireFields(req.body, ['contentBase64', 'mimeType']);
+  const data = pick(req.body, ['contentBase64', 'fileName', 'mimeType']);
+  return ok(res, await service.uploadPhoto(getTenantId(req), req.params.id, data));
+});
+
 module.exports = {
   list, summary, getById, create, update, remove,
-  addRelationship, removeRelationship, invitePortal, revokePortal,
+  addRelationship, removeRelationship, invitePortal, revokePortal, uploadPhoto,
 };

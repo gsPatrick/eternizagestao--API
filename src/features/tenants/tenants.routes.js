@@ -23,5 +23,6 @@ router.delete('/:id', controller.remove);
 router.post('/:id/activate', controller.activate);
 router.post('/:id/deactivate', controller.deactivate);
 router.post('/:id/resend-invite', controller.resendInvite);
+router.post('/:id/logo', controller.uploadLogo);
 
 module.exports = router;

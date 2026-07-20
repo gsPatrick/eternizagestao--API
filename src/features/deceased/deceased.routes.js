@@ -15,6 +15,7 @@ router.get('/', controller.list);
 router.get('/location-counts', controller.locationCounts);
 router.get('/:id', controller.getById);
 router.post('/', write, controller.create);
+router.post('/:id/photo', write, controller.uploadPhoto);
 router.patch('/:id', write, controller.update);
 router.delete('/:id', authorize('admin'), controller.remove);
 

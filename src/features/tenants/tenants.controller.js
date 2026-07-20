@@ -54,4 +54,12 @@ const current = catchAsync(async (req, res) => {
   return ok(res, service.publicProfile(req.tenant));
 });
 
-module.exports = { list, getById, create, update, remove, activate, deactivate, resendInvite, current };
+// POST /v1/tenants/:id/logo — super_admin envia a logo da cidade :id (base64).
+// Reusa o uploadLogo do service (recebe o tenantId da cidade alvo). Retorna { logoUrl } assinado.
+const uploadLogo = catchAsync(async (req, res) => {
+  requireFields(req.body, ['contentBase64', 'mimeType']);
+  const data = pick(req.body, ['contentBase64', 'fileName', 'mimeType']);
+  return ok(res, await service.uploadLogo(req.params.id, data));
+});
+
+module.exports = { list, getById, create, update, remove, activate, deactivate, resendInvite, current, uploadLogo };

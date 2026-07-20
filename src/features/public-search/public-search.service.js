@@ -156,6 +156,12 @@ async function ownerGraveIds(tenantId, crit) {
   const t = crit.anyText ? str(crit.anyText) : null;
   if (crit.ownerName || t) personOr.push({ fullName: like(crit.ownerName || t) });
   if (crit.cpfDigits) personOr.push({ cpf: { [Op.in]: cpfVariants(crit.cpfDigits) } });
+  // documento: casa por CPF (com/sem máscara) ou RG do proprietário/responsável.
+  if (crit.documento) {
+    const dd = digitsOf(crit.documento);
+    if (dd.length === 11) personOr.push({ cpf: { [Op.in]: cpfVariants(dd) } });
+    personOr.push({ cpf: like(crit.documento) }, { rg: like(crit.documento) });
+  }
   if (!personOr.length) return [];
 
   const rows = await Concession.findAll({
@@ -215,11 +221,12 @@ async function search(tenantId, query) {
   const lote = str(query.lote);
   const jazigo = str(query.jazigo || query.graveCode);
   const situacao = str(query.situacao);
+  const documento = str(query.documento);
 
-  const hasSpecific = nome || cpfRaw || quadra || lote || jazigo || situacao;
+  const hasSpecific = nome || cpfRaw || quadra || lote || jazigo || situacao || documento;
   if (!q && !hasSpecific) {
     throw AppError.badRequest(
-      'Informe ao menos um critério: q (busca ampla) ou um filtro (nome, cpf, quadra, lote, jazigo, situacao).',
+      'Informe ao menos um critério: q (busca ampla) ou um filtro (nome, cpf, documento, quadra, lote, jazigo, situacao).',
       'MISSING_CRITERIA'
     );
   }
@@ -253,6 +260,21 @@ async function search(tenantId, query) {
     const d = digitsOf(cpfRaw);
     const ids = await graveIds(tenantId, { cpfDigits: d });
     and.push({ [Op.or]: [{ cpf: { [Op.in]: cpfVariants(d) } }, { currentGraveId: { [Op.in]: ids } }] });
+  }
+
+  // documento: casa por número de documento — CPF, RG ou certidão de óbito do
+  // sepultado, OU CPF/RG do proprietário/responsável (via concessão).
+  if (documento) {
+    const d = digitsOf(documento);
+    const ids = await graveIds(tenantId, { documento });
+    const or = [
+      { cpf: like(documento) },
+      { rg: like(documento) },
+      { deathCertificateNumber: like(documento) },
+      { currentGraveId: { [Op.in]: ids } },
+    ];
+    if (d.length === 11) or.push({ cpf: { [Op.in]: cpfVariants(d) } });
+    and.push({ [Op.or]: or });
   }
 
   if (quadra) and.push({ currentGraveId: { [Op.in]: await graveIds(tenantId, { quadra }) } });

@@ -29,8 +29,41 @@ async function listOrthophotos(tenantId, cemeteryId) {
   return rows.map(serializeOrthophoto);
 }
 
+// Valida o shape de corners { tl,tr,br,bl } com cada canto = [lat, lng].
+function assertCorners(corners) {
+  if (corners == null) return;
+  const keys = ['tl', 'tr', 'br', 'bl'];
+  const ok = corners && typeof corners === 'object' && keys.every((k) => {
+    const c = corners[k];
+    return Array.isArray(c) && c.length === 2 && c.every((n) => typeof n === 'number' && Number.isFinite(n));
+  });
+  if (!ok) {
+    throw AppError.badRequest(
+      'corners deve ser { tl:[lat,lng], tr:[lat,lng], br:[lat,lng], bl:[lat,lng] } com números.',
+      'INVALID_CORNERS'
+    );
+  }
+}
+
+function assertOpacity(opacity) {
+  if (opacity == null) return;
+  if (typeof opacity !== 'number' || opacity < 0 || opacity > 1) {
+    throw AppError.badRequest('opacity deve ser um número entre 0 e 1.', 'INVALID_OPACITY');
+  }
+}
+
+// Zera isActive das demais ortofotos do cemitério, deixando só `keepId` ativa.
+async function deactivateOthers(tenantId, cemeteryId, keepId) {
+  await Orthophoto.update(
+    { isActive: false },
+    { where: { tenantId, cemeteryId, id: { [require('sequelize').Op.ne]: keepId } } }
+  );
+}
+
 async function uploadOrthophoto(tenantId, cemeteryId, data) {
   await assertCemetery(tenantId, cemeteryId);
+  assertCorners(data.corners);
+  assertOpacity(data.opacity);
   let fileUrl = data.fileUrl;
   if (data.contentBase64) {
     const saved = await storage.saveFile({
@@ -47,6 +80,8 @@ async function uploadOrthophoto(tenantId, cemeteryId, data) {
     tenantId, cemeteryId, fileUrl,
     name: data.name,
     bounds: data.bounds,
+    corners: data.corners,
+    opacity: data.opacity,
     widthPx: data.widthPx,
     heightPx: data.heightPx,
     resolutionCmPx: data.resolutionCmPx,
@@ -55,10 +90,7 @@ async function uploadOrthophoto(tenantId, cemeteryId, data) {
 
   // apenas uma ortofoto ativa por cemitério
   if (data.setActive !== false) {
-    await Orthophoto.update(
-      { isActive: false },
-      { where: { tenantId, cemeteryId, id: { [require('sequelize').Op.ne]: ortho.id } } }
-    );
+    await deactivateOthers(tenantId, cemeteryId, ortho.id);
     await ortho.update({ isActive: true });
   }
   return serializeOrthophoto(ortho);
@@ -67,9 +99,45 @@ async function uploadOrthophoto(tenantId, cemeteryId, data) {
 async function updateOrthophoto(tenantId, id, data) {
   const ortho = await Orthophoto.findOne({ where: { id, tenantId } });
   if (!ortho) throw AppError.notFound('Ortofoto não encontrada.');
-  const { name, bounds, widthPx, heightPx, resolutionCmPx, capturedAt, isActive } = data;
-  await ortho.update({ name, bounds, widthPx, heightPx, resolutionCmPx, capturedAt, isActive });
+  assertCorners(data.corners);
+  assertOpacity(data.opacity);
+  // Só sobrescreve os campos presentes no payload (PATCH parcial).
+  const patch = {};
+  for (const key of ['name', 'bounds', 'corners', 'opacity', 'widthPx', 'heightPx', 'resolutionCmPx', 'capturedAt', 'isActive']) {
+    if (data[key] !== undefined) patch[key] = data[key];
+  }
+  await ortho.update(patch);
+  // Ao ativar via PATCH, garante unicidade da ortofoto ativa por cemitério.
+  if (patch.isActive === true) await deactivateOthers(tenantId, ortho.cemeteryId, ortho.id);
   return serializeOrthophoto(ortho);
+}
+
+async function removeOrthophoto(tenantId, id) {
+  const ortho = await Orthophoto.findOne({ where: { id, tenantId } });
+  if (!ortho) throw AppError.notFound('Ortofoto não encontrada.');
+  await ortho.destroy();
+}
+
+// Contexto do mapa: centro do cemitério (entrada GPS) + ortofoto ativa + bounds.
+// Vive no domínio do MAPA para não depender da feature cemeteries.
+async function getMapContext(tenantId, cemeteryId) {
+  const cemetery = await assertCemetery(tenantId, cemeteryId);
+  const lat = cemetery.entranceLatitude != null ? Number(cemetery.entranceLatitude) : null;
+  const lng = cemetery.entranceLongitude != null ? Number(cemetery.entranceLongitude) : null;
+  const active = await Orthophoto.findOne({
+    where: { tenantId, cemeteryId, isActive: true },
+    order: [['createdAt', 'DESC']],
+  });
+  const orthophoto = active ? serializeOrthophoto(active) : null;
+  return {
+    cemetery: {
+      id: cemetery.id,
+      name: cemetery.name,
+      center: lat != null && lng != null ? { lat, lng } : null,
+    },
+    orthophoto,
+    bounds: orthophoto ? orthophoto.bounds : null,
+  };
 }
 
 // ---- Malha de caminhos (navegação GPS) ----
@@ -93,16 +161,27 @@ async function removePath(tenantId, id) {
 }
 
 // ---- Geometria da sepultura (demarcação sobre a ortofoto) ----
+//
+// CONVENÇÃO DE COORDENADAS (geoPolygon):
+//   geoPolygon é um ANEL de vértices [[lat, lng], [lat, lng], ...] (3+ pontos),
+//   na MESMA ordem [latitude, longitude] usada em todo o sistema (map_paths,
+//   bounds/corners da ortofoto, Leaflet). NÃO é a ordem GeoJSON [lng, lat].
+//   O anel não precisa repetir o primeiro ponto no fim (não é GeoJSON estrito).
+//   `latitude`/`longitude` guardam o ponto-âncora (centro/pino) da sepultura.
 async function setGraveGeometry(tenantId, graveId, { geoPolygon, latitude, longitude }) {
   const grave = await Grave.findOne({ where: { id: graveId, tenantId } });
   if (!grave) throw AppError.notFound('Sepultura não encontrada.');
   if (geoPolygon && (!Array.isArray(geoPolygon) || geoPolygon.length < 3)) {
     throw AppError.badRequest('geoPolygon deve ser um polígono [[lat,lng], ...] com 3+ pontos.', 'INVALID_POLYGON');
   }
-  return grave.update({ geoPolygon, latitude, longitude });
+  const patch = {};
+  if (geoPolygon !== undefined) patch.geoPolygon = geoPolygon;
+  if (latitude !== undefined) patch.latitude = latitude;
+  if (longitude !== undefined) patch.longitude = longitude;
+  return grave.update(patch);
 }
 
 module.exports = {
-  listOrthophotos, uploadOrthophoto, updateOrthophoto,
+  listOrthophotos, uploadOrthophoto, updateOrthophoto, removeOrthophoto, getMapContext,
   listPaths, createPath, removePath, setGraveGeometry,
 };

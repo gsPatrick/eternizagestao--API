@@ -10,7 +10,15 @@ module.exports = (sequelize, DataTypes) => {
       cemeteryId: { type: DataTypes.UUID, allowNull: false },
       name: { type: DataTypes.STRING(150), allowNull: false },
       fileUrl: { type: DataTypes.STRING(500), allowNull: false },
+      // bounds: retângulo alinhado ao norte { sw:[lat,lng], ne:[lat,lng] } (legado).
       bounds: { type: DataTypes.JSONB },
+      // corners: georreferência por 4 cantos da ortofoto POSICIONADA sobre o mapa.
+      // O operador arrasta/escala/rotaciona a imagem; cada canto vira lat/lng real.
+      // Shape: { tl:[lat,lng], tr:[lat,lng], br:[lat,lng], bl:[lat,lng] }
+      //   tl=top-left, tr=top-right, br=bottom-right, bl=bottom-left.
+      corners: { type: DataTypes.JSONB },
+      // opacity: opacidade da ortofoto sobre a base OpenStreetMap (0..1).
+      opacity: { type: DataTypes.FLOAT, allowNull: false, defaultValue: 0.85 },
       widthPx: { type: DataTypes.INTEGER },
       heightPx: { type: DataTypes.INTEGER },
       resolutionCmPx: { type: DataTypes.DECIMAL(8, 3) },

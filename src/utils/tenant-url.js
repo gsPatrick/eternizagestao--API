@@ -14,8 +14,11 @@
  * DNS wildcard (*.BASE_DOMAIN) + TLS é INFRAESTRUTURA — fora do código.
  */
 
-// Domínio base da plataforma — mantém paridade com tenants.service.computeDomain.
-const BASE_DOMAIN = process.env.BASE_DOMAIN || 'eterniza.com.br';
+// Domínio base p/ MONTAR links branded (<sub>.<BASE_DOMAIN>) — mantém paridade
+// com tenants.service.computeDomain. Só afeta a SAÍDA (e-mails/URLs geradas); a
+// resolução do tenant na ENTRADA ignora o domínio (ver tenant-resolver). Trocável
+// por env BASE_DOMAIN — o padrão é o domínio oficial da plataforma.
+const BASE_DOMAIN = process.env.BASE_DOMAIN || 'eternizagestao.com.br';
 
 // Extrai/normaliza o subdomínio de um tenant (aceita objeto model, POJO ou string).
 function subdomainOf(tenant) {

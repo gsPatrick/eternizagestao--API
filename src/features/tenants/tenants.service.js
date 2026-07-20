@@ -47,9 +47,10 @@ const ONBOARDING_FIELDS = [
 const MODES = ['completo', 'delegado'];
 const ROLE_LABELS = { admin: 'Administrador', operador: 'Operador', consulta: 'Consulta' };
 
-// Domínio base da plataforma (subdomínio vira <sub>.<BASE_DOMAIN>).
-// DNS wildcard (*.BASE_DOMAIN) + TLS é INFRAESTRUTURA — fora do código.
-const BASE_DOMAIN = process.env.BASE_DOMAIN || 'eterniza.com.br';
+// Domínio base p/ EXIBIR o domínio da cidade (<sub>.<BASE_DOMAIN>). Só saída —
+// a entrada resolve o tenant pelo subdomínio, ignorando o domínio raiz.
+// Trocável por env BASE_DOMAIN. DNS wildcard + TLS é INFRAESTRUTURA.
+const BASE_DOMAIN = process.env.BASE_DOMAIN || 'eternizagestao.com.br';
 
 function computeDomain(subdomain) {
   return `${subdomain}.${BASE_DOMAIN}`;

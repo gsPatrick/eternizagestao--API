@@ -97,13 +97,13 @@ function attachAuditHooks(sequelize) {
       newData[key] = instance.get(key);
     }
 
-    const { record, friendlyEntity } = audit();
+    const { record, friendlyEntity, describeEdit } = audit();
     const entityType = friendlyEntity(instance.constructor);
     record({
       action: 'edicao',
       entityType,
       entityId: instance.id != null ? instance.id : null,
-      description: `${entityType} editado(a): ${changedKeys.join(', ')}`,
+      description: describeEdit(entityType, changedKeys),
       previousData,
       newData,
     });

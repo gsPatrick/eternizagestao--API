@@ -79,6 +79,115 @@ const FRIENDLY_ENTITY = Object.freeze({
   data_exports: 'Exportação de Dados',
 });
 
+/* =========================================================================
+ * NOMES AMIGÁVEIS por CAMPO (chave camelCase/snake_case -> rótulo legível PT).
+ * Usado para montar a descrição do evento (ex.: "Cliente editado(a): Razão
+ * social, Cor primária, ..."). Campos não mapeados caem no humanizador genérico.
+ * ========================================================================= */
+const FIELD_LABELS = Object.freeze({
+  // genéricos
+  name: 'Nome',
+  legalName: 'Razão social',
+  tradeName: 'Nome fantasia',
+  email: 'E-mail',
+  phone: 'Telefone',
+  document: 'Documento',
+  cpf: 'CPF',
+  cnpj: 'CNPJ',
+  rg: 'RG',
+  status: 'Situação',
+  notes: 'Observações',
+  description: 'Descrição',
+  active: 'Ativo',
+  isActive: 'Ativo',
+  // marca / identidade do cliente (tenant)
+  primaryColor: 'Cor primária',
+  secondaryColor: 'Cor secundária',
+  logoUrl: 'Logo',
+  documentHeader: 'Cabeçalho de documentos',
+  onboardingStatus: 'Status de ativação',
+  subdomain: 'Subdomínio',
+  domain: 'Domínio',
+  plan: 'Plano',
+  // endereço
+  addressStreet: 'Endereço — rua',
+  addressNumber: 'Endereço — número',
+  addressComplement: 'Endereço — complemento',
+  addressDistrict: 'Endereço — bairro',
+  addressCity: 'Endereço — cidade',
+  addressState: 'Endereço — estado',
+  addressZipcode: 'Endereço — CEP',
+  zipcode: 'CEP',
+  // usuário / acesso
+  role: 'Perfil',
+  passwordHash: 'Senha',
+  password: 'Senha',
+  mustChangePassword: 'Troca de senha obrigatória',
+  lastLoginAt: 'Último acesso',
+  // pessoa
+  motherName: 'Nome da mãe',
+  fatherName: 'Nome do pai',
+  birthDate: 'Data de nascimento',
+  photoUrl: 'Foto',
+  gender: 'Sexo',
+  maritalStatus: 'Estado civil',
+  // sepultado / óbito
+  deathDate: 'Data do óbito',
+  deathCause: 'Causa do óbito',
+  attendingPhysician: 'Médico responsável',
+  deathCertificateFileUrl: 'Certidão de óbito',
+  // concessão / sepultura
+  code: 'Código',
+  graveCode: 'Código da sepultura',
+  responsiblePersonId: 'Responsável',
+  ownerPersonId: 'Proprietário',
+  concessionType: 'Tipo de concessão',
+  startDate: 'Início',
+  endDate: 'Término',
+  // financeiro
+  amount: 'Valor',
+  dueDate: 'Vencimento',
+  paidAt: 'Pago em',
+  paymentMethod: 'Forma de pagamento',
+});
+
+// Rótulo legível de um campo: usa o mapa; senão humaniza (camelCase/snake -> texto).
+function fieldLabel(key) {
+  if (FIELD_LABELS[key]) return FIELD_LABELS[key];
+  const spaced = String(key)
+    .replace(/_/g, ' ')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .trim();
+  return spaced.charAt(0).toUpperCase() + spaced.slice(1);
+}
+
+/**
+ * Monta a descrição amigável de uma EDIÇÃO a partir das chaves alteradas.
+ * Ex.: "Cliente editado(a): Razão social, Cor primária, Endereço — cidade e mais 3 campos".
+ * Lista até MAX rótulos e resume o excedente (o detalhe campo-a-campo fica na tela).
+ * Remove duplicatas de rótulo (ex.: senha) para não repetir "Senha, Senha".
+ */
+function describeEdit(entityType, keys = []) {
+  const labels = [];
+  const seen = new Set();
+  for (const key of keys) {
+    const label = fieldLabel(key);
+    if (seen.has(label)) continue;
+    seen.add(label);
+    labels.push(label);
+  }
+  if (labels.length === 0) return `${entityType} editado(a)`;
+  const MAX = 6;
+  let list;
+  if (labels.length <= MAX) {
+    list = labels.join(', ');
+  } else {
+    const extra = labels.length - MAX;
+    list = `${labels.slice(0, MAX).join(', ')} e mais ${extra} ${extra === 1 ? 'campo' : 'campos'}`;
+  }
+  return `${entityType} editado(a): ${list}`;
+}
+
 /**
  * Resolve o nome amigável a partir de um model, instância ou nome de tabela.
  * Fallback: retorna a própria tabela quando não mapeada.
@@ -192,4 +301,4 @@ function log({
   }
 }
 
-module.exports = { record, log, friendlyEntity, FRIENDLY_ENTITY, ACTIONS };
+module.exports = { record, log, friendlyEntity, describeEdit, fieldLabel, FRIENDLY_ENTITY, FIELD_LABELS, ACTIONS };

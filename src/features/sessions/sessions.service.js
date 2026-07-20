@@ -133,9 +133,14 @@ async function changeMyPassword(userId, { currentPassword, newPassword }) {
     throw AppError.badRequest('A nova senha deve ter ao menos 6 caracteres.', 'WEAK_PASSWORD');
   }
   // troca a senha e LIMPA a obrigatoriedade do 1º acesso.
-  await user.update({ passwordHash: await hashPassword(newPassword), mustChangePassword: false });
+  // skipAudit: registramos a ação SEMÂNTICA abaixo ("Senha alterada"); sem o flag,
+  // o hook global geraria um 2º log feio ("Usuário editado(a): Senha, ...").
+  await user.update(
+    { passwordHash: await hashPassword(newPassword), mustChangePassword: false },
+    { skipAudit: true }
+  );
   audit.record({
-    action: 'atualizacao',
+    action: 'edicao',
     entityType: 'Usuário',
     entityId: user.id,
     description: `Senha alterada por ${user.name}`,

@@ -2,7 +2,7 @@
 
 const AppError = require('../../utils/app-error');
 const storage = require('../../providers/storage');
-const { Cemetery, Orthophoto, MapPath, Grave } = require('../../models');
+const { Cemetery, Orthophoto, MapPath, Grave, Block, Street, Lot } = require('../../models');
 
 // TTL longo (7 dias) para a URL assinada da ortofoto: é branding/mapa exibido via
 // <img>/<iframe>, o painel rebusca fresco antes de expirar.
@@ -124,10 +124,18 @@ async function getMapContext(tenantId, cemeteryId) {
   const cemetery = await assertCemetery(tenantId, cemeteryId);
   const lat = cemetery.entranceLatitude != null ? Number(cemetery.entranceLatitude) : null;
   const lng = cemetery.entranceLongitude != null ? Number(cemetery.entranceLongitude) : null;
-  const active = await Orthophoto.findOne({
-    where: { tenantId, cemeteryId, isActive: true },
-    order: [['createdAt', 'DESC']],
-  });
+  // Ortofoto ativa + camadas de quadra/rua/lote (espelha public-map.cemeteryMap).
+  // O painel alterna essas camadas sobre a ortofoto; só as com geoPolygon são
+  // desenháveis, mas devolvemos todas (o front ignora as sem geometria).
+  const [active, blocks, streets, lots] = await Promise.all([
+    Orthophoto.findOne({
+      where: { tenantId, cemeteryId, isActive: true },
+      order: [['createdAt', 'DESC']],
+    }),
+    Block.findAll({ where: { tenantId, cemeteryId }, attributes: ['id', 'code', 'name', 'geoPolygon'] }),
+    Street.findAll({ where: { tenantId, cemeteryId }, attributes: ['id', 'code', 'name', 'geoPolygon'] }),
+    Lot.findAll({ where: { tenantId, cemeteryId }, attributes: ['id', 'code', 'geoPolygon'] }),
+  ]);
   const orthophoto = active ? serializeOrthophoto(active) : null;
   return {
     cemetery: {
@@ -137,6 +145,7 @@ async function getMapContext(tenantId, cemeteryId) {
     },
     orthophoto,
     bounds: orthophoto ? orthophoto.bounds : null,
+    layers: { blocks, streets, lots },
   };
 }
 

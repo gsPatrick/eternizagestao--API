@@ -20,7 +20,7 @@ async function cemeteryMap(tenantId, cemeteryId) {
   const [orthophoto, blocks, streets, lots, graves] = await Promise.all([
     Orthophoto.findOne({
       where: { tenantId, cemeteryId, isActive: true },
-      attributes: ['id', 'fileUrl', 'bounds', 'widthPx', 'heightPx'],
+      attributes: ['id', 'fileUrl', 'bounds', 'widthPx', 'heightPx', 'corners', 'opacity'],
     }),
     Block.findAll({ where: { tenantId, cemeteryId }, attributes: ['id', 'code', 'name', 'geoPolygon'] }),
     Street.findAll({ where: { tenantId, cemeteryId }, attributes: ['id', 'code', 'name', 'geoPolygon'] }),

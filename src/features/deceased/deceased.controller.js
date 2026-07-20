@@ -40,4 +40,11 @@ const uploadPhoto = catchAsync(async (req, res) => {
   return ok(res, await service.uploadPhoto(getTenantId(req), req.params.id, data));
 });
 
-module.exports = { list, locationCounts, getById, create, update, remove, uploadPhoto };
+// POST /v1/deceased/:id/death-certificate — declaração/certidão de óbito (PDF base64).
+const uploadDeathCertificate = catchAsync(async (req, res) => {
+  requireFields(req.body, ['contentBase64', 'mimeType']);
+  const data = pick(req.body, ['contentBase64', 'fileName', 'mimeType']);
+  return ok(res, await service.uploadDeathCertificate(getTenantId(req), req.params.id, data));
+});
+
+module.exports = { list, locationCounts, getById, create, update, remove, uploadPhoto, uploadDeathCertificate };

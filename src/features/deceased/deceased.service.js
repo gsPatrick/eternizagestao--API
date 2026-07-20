@@ -37,7 +37,7 @@ const currentGraveInclude = {
 
 const EDITABLE_FIELDS = [
   'fullName', 'cpf', 'rg', 'birthDate', 'deathDate', 'deathTime', 'gender',
-  'motherName', 'fatherName', 'birthplace', 'causeOfDeath',
+  'motherName', 'fatherName', 'birthplace', 'causeOfDeath', 'attendingPhysician',
   'deathCertificateNumber', 'deathCertificateRegistry', 'photoUrl', 'notes',
 ];
 
@@ -112,8 +112,9 @@ async function attachResponsible(tenantId, rows) {
   return rows.map((r) => {
     const responsible = (r.currentGraveId && byGrave.get(r.currentGraveId)) || byDeceased.get(r.id) || null;
     const json = r.toJSON();
-    // photoUrl assinado (só se local /files/...) — a <img> do painel não manda Bearer.
+    // photoUrl / certidão de óbito assinados (só se locais /files/...).
     json.photoUrl = signPhoto(json.photoUrl);
+    json.deathCertificateFileUrl = signPhoto(json.deathCertificateFileUrl);
     return { ...json, responsible, lastBurialDate: lastBurialByDeceased.get(r.id) || null };
   });
 }
@@ -246,4 +247,38 @@ async function uploadPhoto(tenantId, id, { contentBase64, fileName, mimeType } =
   return { photoUrl: signPhoto(saved.fileUrl) };
 }
 
-module.exports = { list, locationCounts, getById, create, update, remove, uploadPhoto, EDITABLE_FIELDS };
+// Tipos e limite da declaração/certidão de óbito (PDF ou imagem escaneada).
+const CERT_MIME_TYPES = ['application/pdf', 'image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+const CERT_MAX_BYTES = 15 * 1024 * 1024;
+
+/**
+ * Upload da DECLARAÇÃO/CERTIDÃO DE ÓBITO (PDF) anexada ao sepultado. Guarda em
+ * deceased.deathCertificateFileUrl e devolve a URL assinada p/ download.
+ */
+async function uploadDeathCertificate(tenantId, id, { contentBase64, fileName, mimeType } = {}) {
+  const deceased = await Deceased.findOne({ where: { id, tenantId } });
+  if (!deceased) throw AppError.notFound('Sepultado não encontrado.');
+  if (!contentBase64) throw AppError.badRequest('Envie o arquivo (contentBase64).', 'MISSING_FILE');
+  const mime = String(mimeType || '').toLowerCase();
+  if (!CERT_MIME_TYPES.includes(mime)) {
+    throw AppError.badRequest('Formato inválido. Envie um PDF ou imagem (PNG/JPEG).', 'INVALID_FILE_TYPE');
+  }
+  const buffer = Buffer.from(contentBase64, 'base64');
+  if (!buffer.length) throw AppError.badRequest('Arquivo vazio ou inválido.', 'INVALID_FILE');
+  if (buffer.length > CERT_MAX_BYTES) {
+    throw AppError.badRequest('Arquivo muito grande. O limite é 15 MB.', 'FILE_TOO_LARGE');
+  }
+  const saved = await storage.saveFile({
+    tenantId,
+    fileName: fileName || 'certidao-obito.pdf',
+    content: buffer,
+    mimeType: mime,
+  });
+  await deceased.update({ deathCertificateFileUrl: saved.fileUrl });
+  return { deathCertificateFileUrl: signPhoto(saved.fileUrl) };
+}
+
+module.exports = {
+  list, locationCounts, getById, create, update, remove,
+  uploadPhoto, uploadDeathCertificate, EDITABLE_FIELDS,
+};

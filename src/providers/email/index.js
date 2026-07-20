@@ -38,14 +38,44 @@ function loadSmtpDriver() {
   return _smtp;
 }
 
+// Driver RESEND (remetente da PLATAFORMA) — carregado preguiçosamente.
+let _resend;
+function loadResendDriver() {
+  if (_resend === undefined) {
+    try {
+      // eslint-disable-next-line global-require
+      _resend = require('./drivers/resend');
+    } catch (err) {
+      _resend = null;
+    }
+  }
+  return _resend;
+}
+
+// Config Resend da PLATAFORMA (global, via env). Usada quando a cidade NÃO tem
+// SMTP próprio — ex.: convite ao 1º admin de uma cidade recém-criada, que ainda
+// não configurou nada. Retorna null se RESEND_API_KEY não estiver setada.
+function platformResendConfig() {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey || !apiKey.trim()) return null;
+  return {
+    apiKey: apiKey.trim(),
+    fromEmail: process.env.EMAIL_FROM || 'no-reply@eternizagestao.com.br',
+    fromName: process.env.EMAIL_FROM_NAME || 'Eterniza Gestão',
+  };
+}
+
 // Um tenant "tem SMTP" quando ao menos o host está preenchido.
 function hasTenantSmtp(tenantSmtp) {
   return Boolean(tenantSmtp && typeof tenantSmtp.host === 'string' && tenantSmtp.host.trim());
 }
 
 /**
- * Escolhe o driver para a cidade: `smtp` quando há config e o driver carrega;
- * senão `mock` (nunca quebra o dispatch — cai no log).
+ * Escolhe o driver da mensagem, por PRECEDÊNCIA:
+ *   1) SMTP DA CIDADE (quando o tenant configurou o próprio servidor);
+ *   2) RESEND DA PLATAFORMA (quando há RESEND_API_KEY) — cobre cidades sem SMTP
+ *      e os e-mails do super_admin (convites/onboarding);
+ *   3) MOCK (nunca quebra o dispatch — cai no log).
  */
 function resolveDriver(tenantSmtp) {
   if (hasTenantSmtp(tenantSmtp)) {
@@ -55,6 +85,10 @@ function resolveDriver(tenantSmtp) {
       '[email] Tenant tem SMTP configurado, mas o driver real está indisponível — usando mock.',
       _smtpError && _smtpError.message
     );
+  }
+  if (platformResendConfig()) {
+    const resend = loadResendDriver();
+    if (resend) return resend;
   }
   return mock;
 }
@@ -66,7 +100,10 @@ function resolveDriver(tenantSmtp) {
  * @returns {Promise<{ providerMessageId: string }>}
  */
 async function sendEmail(tenantSmtp, message) {
-  return resolveDriver(tenantSmtp).sendEmail(tenantSmtp, message);
+  const driver = resolveDriver(tenantSmtp);
+  // Resend usa a config GLOBAL da plataforma; smtp/mock usam o SMTP da cidade.
+  const config = driver.name === 'resend' ? platformResendConfig() : tenantSmtp;
+  return driver.sendEmail(config, message);
 }
 
-module.exports = { sendEmail, resolveDriver, mock };
+module.exports = { sendEmail, resolveDriver, mock, platformResendConfig };

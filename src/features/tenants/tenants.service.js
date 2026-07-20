@@ -170,9 +170,11 @@ async function create(payload = {}, actor = {}) {
   const subdomain = normalizeSubdomain(tenantInput.subdomain);
   const adminEmail = String(adminInput.email).toLowerCase().trim();
 
-  // Pré-checagem amigável de subdomínio (inclui soft-deleted → o índice unique
-  // do banco também rejeitaria). A transação abaixo é a garantia real.
-  const existing = await Tenant.findOne({ where: { subdomain }, paranoid: false });
+  // Pré-checagem amigável: só cidades ATIVAS (não apagadas) bloqueiam o
+  // subdomínio. Ao apagar uma cidade, o subdomínio é LIBERADO (ver remove()),
+  // então recriar com o mesmo nome/subdomínio funciona. A transação abaixo é a
+  // garantia real contra corrida.
+  const existing = await Tenant.findOne({ where: { subdomain } });
   if (existing) {
     throw AppError.conflict(
       `Subdomínio '${subdomain}' já está em uso por outra cidade.`,
@@ -248,6 +250,13 @@ async function update(id, data) {
 
 async function remove(id) {
   const tenant = await getById(id);
+  // LIBERA o subdomínio ao apagar. A coluna `subdomain` tem índice unique que
+  // inclui linhas soft-deleted (paranoid), então, sem isto, o valor ficaria
+  // "preso" e recriar a cidade com o mesmo nome falharia. Renomeamos o
+  // subdomínio da cidade removida (sufixo único) para devolver o original ao
+  // pool, e desativamos antes do soft delete.
+  const freed = `${tenant.subdomain}-del-${Date.now().toString(36)}`.slice(0, 63);
+  await tenant.update({ subdomain: freed, active: false });
   await tenant.destroy(); // soft delete (paranoid)
 }
 

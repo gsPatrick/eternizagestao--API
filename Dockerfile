@@ -27,6 +27,6 @@ COPY . .
 ENV NODE_ENV=production
 EXPOSE 3333
 
-# Aplica as migrations e sobe a API.
+# Aplica as migrations, garante o super_admin padrão (idempotente) e sobe a API.
 # (Postgres precisa estar acessível via as variáveis DB_* no start.)
-CMD ["sh", "-c", "npm run migrate && node app.js"]
+CMD ["sh", "-c", "npm run migrate && node scripts/seed-admin.js && node app.js"]

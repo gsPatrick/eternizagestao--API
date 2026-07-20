@@ -1,7 +1,8 @@
 'use strict';
 
+const { Op } = require('sequelize');
 const AppError = require('../../utils/app-error');
-const { comparePassword } = require('../../utils/password');
+const { comparePassword, hashPassword } = require('../../utils/password');
 const { signAccessToken, signRefreshToken, verifyToken } = require('../../utils/jwt');
 const { User, Tenant } = require('../../models');
 const audit = require('../audit-logs/audit.service');
@@ -89,4 +90,51 @@ async function me(userId) {
   return { ...serializeUser(user), tenant: signTenantLogo(user.tenant) };
 }
 
-module.exports = { login, refresh, me };
+/**
+ * Atualiza o PRÓPRIO perfil (nome/e-mail) do usuário logado — self-service.
+ * Serve super_admin e admins de cidade. E-mail é checado por conflito no MESMO
+ * escopo de tenant (multi-tenant permite o mesmo e-mail em cidades distintas).
+ */
+async function updateMe(userId, { name, email }) {
+  const user = await User.findByPk(userId);
+  if (!user) throw AppError.notFound('Usuário não encontrado.');
+
+  const patch = {};
+  if (typeof name === 'string' && name.trim()) patch.name = name.trim();
+  if (typeof email === 'string' && email.trim()) {
+    const normalized = email.trim().toLowerCase();
+    if (normalized !== user.email) {
+      const clash = await User.findOne({
+        where: { email: normalized, tenantId: user.tenantId, id: { [Op.ne]: user.id } },
+      });
+      if (clash) throw AppError.conflict('Já existe um usuário com este e-mail.', 'EMAIL_IN_USE');
+      patch.email = normalized;
+    }
+  }
+  if (Object.keys(patch).length) await user.update(patch);
+  return serializeUser(user);
+}
+
+/**
+ * Troca a PRÓPRIA senha (exige a senha atual). Self-service para qualquer papel.
+ */
+async function changeMyPassword(userId, { currentPassword, newPassword }) {
+  const user = await User.scope('withPassword').findByPk(userId);
+  if (!user) throw AppError.notFound('Usuário não encontrado.');
+  if (!(await comparePassword(currentPassword || '', user.passwordHash))) {
+    throw AppError.unauthorized('Senha atual incorreta.', 'INVALID_PASSWORD');
+  }
+  if (!newPassword || String(newPassword).length < 6) {
+    throw AppError.badRequest('A nova senha deve ter ao menos 6 caracteres.', 'WEAK_PASSWORD');
+  }
+  await user.update({ passwordHash: await hashPassword(newPassword) });
+  audit.record({
+    action: 'atualizacao',
+    entityType: 'Usuário',
+    entityId: user.id,
+    description: `Senha alterada por ${user.name}`,
+  });
+  return { ok: true };
+}
+
+module.exports = { login, refresh, me, updateMe, changeMyPassword };

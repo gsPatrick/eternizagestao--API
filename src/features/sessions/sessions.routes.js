@@ -12,5 +12,7 @@ const router = Router();
 router.post('/', rateLimit({ windowMs: 60_000, max: 10, keyPrefix: 'login' }), tenantResolver({ required: false }), controller.login);
 router.post('/refresh', controller.refresh);
 router.get('/me', auth, controller.me);
+router.patch('/me', auth, controller.updateMe);
+router.patch('/me/password', auth, controller.changeMyPassword);
 
 module.exports = router;

@@ -26,4 +26,23 @@ const me = catchAsync(async (req, res) => {
   return ok(res, result);
 });
 
-module.exports = { login, refresh, me };
+// PATCH /me — atualiza o próprio perfil (nome/e-mail).
+const updateMe = catchAsync(async (req, res) => {
+  const result = await service.updateMe(req.user.id, {
+    name: req.body?.name,
+    email: req.body?.email,
+  });
+  return ok(res, result);
+});
+
+// PATCH /me/password — troca a própria senha (exige a atual).
+const changeMyPassword = catchAsync(async (req, res) => {
+  requireFields(req.body, ['currentPassword', 'newPassword']);
+  const result = await service.changeMyPassword(req.user.id, {
+    currentPassword: req.body.currentPassword,
+    newPassword: req.body.newPassword,
+  });
+  return ok(res, result);
+});
+
+module.exports = { login, refresh, me, updateMe, changeMyPassword };

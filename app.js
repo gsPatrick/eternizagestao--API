@@ -39,15 +39,19 @@ try {
 if (compression) app.use(compression());
 
 // CORS: sistema multi-tenant white-label — cada cidade pode ter o seu próprio
-// domínio/subdomínio, então por PADRÃO liberamos TODAS as origens. A segurança
-// real é o JWT + o tenant do token, não o CORS. Para restringir a uma lista,
-// defina CORS_ORIGINS (separada por vírgula); o valor '*' (ou vazio) libera geral.
-const rawCorsOrigins = (process.env.CORS_ORIGINS || '').trim();
-const corsOrigins =
-  !rawCorsOrigins || rawCorsOrigins === '*'
-    ? true // reflete qualquer Origin da requisição (equivalente a liberar todos)
-    : rawCorsOrigins.split(',').map((o) => o.trim());
-app.use(cors({ origin: corsOrigins }));
+// domínio/subdomínio. Liberamos TODAS as origens SEMPRE (hardcoded, sem depender
+// de env): a segurança real é o JWT + o tenant do token, não o CORS.
+// `origin: true` reflete o Origin da requisição e `credentials: true` mantém o
+// Access-Control-Allow-Origin correto mesmo quando o front usa Authorization.
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant-Subdomain'],
+  })
+);
+app.options('*', cors({ origin: true, credentials: true }));
 
 // limite maior por causa de uploads em base64 (ortofotos, certidões, anexos).
 // verify captura o corpo BRUTO em req.rawBody (Buffer) para verificação HMAC

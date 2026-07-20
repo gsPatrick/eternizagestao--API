@@ -27,6 +27,12 @@ COPY . .
 ENV NODE_ENV=production
 EXPOSE 3333
 
-# Aplica as migrations, garante o super_admin padrão (idempotente) e sobe a API.
-# (Postgres precisa estar acessível via as variáveis DB_* no start.)
-CMD ["sh", "-c", "npm run migrate && node scripts/seed-admin.js && node app.js"]
+# A MESMA imagem serve como API ou como WORKER, decidido no start pela env WORKER:
+#   - WORKER=true  → sobe SÓ o worker (processa a fila de e-mails/notificações e
+#                    roda os agendamentos). NÃO aplica migrations nem seed.
+#   - caso contrário → API: aplica migrations, garante o super_admin (idempotente)
+#                    e sobe o servidor HTTP.
+# No EasyPanel: crie um 2º serviço com esta mesma imagem/repo e a env WORKER=true
+# (mesmas envs de DB/REDIS/RESEND da API). O worker não precisa expor porta.
+# (Postgres/Redis precisam estar acessíveis via as variáveis do ambiente no start.)
+CMD ["sh", "-c", "if [ \"$WORKER\" = \"true\" ]; then echo '[start] modo WORKER'; node src/queues/worker.js; else echo '[start] modo API'; npm run migrate && node scripts/seed-admin.js && node app.js; fi"]

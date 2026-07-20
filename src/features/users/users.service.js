@@ -2,7 +2,7 @@
 
 const crypto = require('crypto');
 const AppError = require('../../utils/app-error');
-const { hashPassword } = require('../../utils/password');
+const { hashPassword, generateTempPassword } = require('../../utils/password');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const { panelLoginUrl } = require('../../utils/tenant-url');
 const { User, Tenant } = require('../../models');
@@ -25,7 +25,7 @@ async function panelLoginUrlFor(tenantId) {
 }
 
 // Enfileira (via camada de filas) o e-mail transacional de convite ao usuário.
-async function sendInviteEmail(tenantId, user, actor = {}) {
+async function sendInviteEmail(tenantId, user, actor = {}, tempPassword = null) {
   const ctaUrl = await panelLoginUrlFor(tenantId);
   await notifications.notify({
     tenantId,
@@ -40,6 +40,8 @@ async function sendInviteEmail(tenantId, user, actor = {}) {
       nome: user.name,
       perfil: ROLE_LABELS[user.role] || user.role,
       convidado_por: actor.name || 'a administração',
+      email: user.email,
+      senha_temporaria: tempPassword || '',
       cta_url: ctaUrl,
     },
     referenceType: 'user',
@@ -124,17 +126,24 @@ async function invite(tenantId, data, actor = {}) {
   if (existing) {
     throw AppError.conflict('Já existe um usuário com este e-mail.', 'EMAIL_IN_USE');
   }
-  const tempPassword = crypto.randomBytes(24).toString('hex');
+  const tempPassword = generateTempPassword();
   const passwordHash = await hashPassword(tempPassword);
-  const user = await User.create({ tenantId, name: data.name, email, phone: data.phone ?? null, passwordHash, role });
-  await sendInviteEmail(tenantId, user, actor);
+  const user = await User.create({
+    tenantId, name: data.name, email, phone: data.phone ?? null, passwordHash, role,
+    mustChangePassword: true, // troca a senha temporária no 1º acesso
+  });
+  await sendInviteEmail(tenantId, user, actor, tempPassword);
   return getById(tenantId, user.id); // recarrega sem passwordHash
 }
 
-// Reenvia o e-mail de convite a um usuário já existente.
+// Reenvia o e-mail de convite: redefine a senha temporária (o link sempre dá
+// acesso) e reexige a troca no 1º acesso.
 async function resendInvite(tenantId, id, actor = {}) {
   const user = await getById(tenantId, id);
-  await sendInviteEmail(tenantId, user, actor);
+  const full = await User.findByPk(user.id);
+  const tempPassword = generateTempPassword();
+  await full.update({ passwordHash: await hashPassword(tempPassword), mustChangePassword: true });
+  await sendInviteEmail(tenantId, full, actor, tempPassword);
   return user;
 }
 

@@ -1,4 +1,11 @@
-<h1 style="margin:0 0 14px 0; font-family:Georgia,serif; font-size:27px; font-weight:600; color:#ffffff;">Você foi convidado</h1>
-<p style="margin:0 0 16px 0; font-size:16px; line-height:1.7; color:rgba(255,255,255,0.82);">Olá, {{nome}}! Você foi convidado para acessar o <strong style="color:#ffffff;">{{tenant_name}}</strong> no Eterniza Gestão, com o perfil <strong style="color:#ffffff;">{{perfil}}</strong>. Aceite o convite para definir sua senha e começar.</p>
-<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:26px 0 6px 0;"><tr><td style="border-radius:12px; background-color:#ffffff;"><a href="{{cta_url}}" style="display:inline-block; padding:14px 32px; font-family:Arial,Helvetica,sans-serif; font-size:16px; font-weight:bold; color:{{accent}}; text-decoration:none; border-radius:12px;">Aceitar convite</a></td></tr></table>
-<p style="margin:20px 0 0 0; font-size:13px; line-height:1.6; color:rgba(255,255,255,0.55);">Convite enviado por {{convidado_por}}. O link expira em 7 dias.</p>
+<h1 style="margin:0 0 14px 0; font-family:Georgia,serif; font-size:27px; font-weight:600; color:#ffffff;">Seu acesso está pronto</h1>
+<p style="margin:0 0 16px 0; font-size:16px; line-height:1.7; color:rgba(255,255,255,0.82);">Olá, {{nome}}! Você foi convidado para acessar o <strong style="color:#ffffff;">{{tenant_name}}</strong> no Eterniza Gestão, com o perfil <strong style="color:#ffffff;">{{perfil}}</strong>. Use as credenciais abaixo para o primeiro acesso.</p>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" width="100%" style="margin:8px 0 6px 0;"><tr><td style="border:1px solid {{accent_border}}; border-radius:12px; background-color:{{accent_mid}}; padding:16px 18px;">
+  <p style="margin:0 0 4px 0; font-size:12px; letter-spacing:0.04em; text-transform:uppercase; color:rgba(255,255,255,0.55);">E-mail</p>
+  <p style="margin:0 0 14px 0; font-size:16px; font-weight:bold; color:#ffffff;">{{email}}</p>
+  <p style="margin:0 0 4px 0; font-size:12px; letter-spacing:0.04em; text-transform:uppercase; color:rgba(255,255,255,0.55);">Senha temporária</p>
+  <p style="margin:0; font-size:20px; font-weight:bold; letter-spacing:0.06em; font-family:'Courier New',monospace; color:#ffffff;">{{senha_temporaria}}</p>
+</td></tr></table>
+<table role="presentation" cellpadding="0" cellspacing="0" border="0" style="margin:22px 0 6px 0;"><tr><td style="border-radius:12px; background-color:#ffffff;"><a href="{{cta_url}}" style="display:inline-block; padding:14px 32px; font-family:Arial,Helvetica,sans-serif; font-size:16px; font-weight:bold; color:{{accent}}; text-decoration:none; border-radius:12px;">Acessar o painel</a></td></tr></table>
+<p style="margin:18px 0 0 0; font-size:14px; line-height:1.7; color:rgba(255,255,255,0.75);">Por segurança, no <strong style="color:#ffffff;">primeiro acesso</strong> você vai definir uma nova senha só sua.</p>
+<p style="margin:14px 0 0 0; font-size:13px; line-height:1.6; color:rgba(255,255,255,0.55);">Convite enviado por {{convidado_por}}.</p>

@@ -3,7 +3,7 @@
 const crypto = require('crypto');
 const AppError = require('../../utils/app-error');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
-const { hashPassword } = require('../../utils/password');
+const { hashPassword, generateTempPassword } = require('../../utils/password');
 const { encryptSecret } = require('../../utils/secret-crypto');
 const { panelLoginUrl } = require('../../utils/tenant-url');
 const { sequelize, Tenant, User } = require('../../models');
@@ -109,7 +109,7 @@ function serializeAdmin(user) {
 // admin da cidade — reutiliza o template 'user-invite' já usado no convite de
 // usuários da equipe. Nunca lança pro fluxo (best-effort é responsabilidade do
 // chamador); aqui só monta e chama notify.
-async function sendAdminInvite(tenant, user, actor = {}) {
+async function sendAdminInvite(tenant, user, actor = {}, tempPassword = null) {
   await notifications.notify({
     tenantId: tenant.id,
     recipientUserId: user.id,
@@ -123,6 +123,9 @@ async function sendAdminInvite(tenant, user, actor = {}) {
       nome: user.name,
       perfil: ROLE_LABELS[user.role] || user.role,
       convidado_por: actor.name || 'a plataforma Eterniza',
+      // credenciais do 1º acesso (o admin troca a senha ao entrar)
+      email: user.email,
+      senha_temporaria: tempPassword || '',
       // Link branded da cidade (deriva do subdomínio; fallback env global).
       cta_url: panelLoginUrl(tenant),
     },
@@ -196,7 +199,8 @@ async function create(payload = {}, actor = {}) {
     tenantData.onboardingStatus = 'pendente';
   }
 
-  const tempPassword = crypto.randomBytes(24).toString('hex');
+  // Senha TEMPORÁRIA legível (o admin digita no 1º acesso e troca em seguida).
+  const tempPassword = generateTempPassword();
   const passwordHash = await hashPassword(tempPassword);
 
   let tenant;
@@ -212,6 +216,7 @@ async function create(payload = {}, actor = {}) {
           phone: adminInput.phone ?? null,
           passwordHash,
           role: 'admin',
+          mustChangePassword: true, // obriga a definir a senha no 1º login
         },
         { transaction: t }
       );
@@ -228,9 +233,9 @@ async function create(payload = {}, actor = {}) {
   }
 
   // Após o COMMIT: enfileira o convite ao primeiro admin (best-effort — uma
-  // falha de e-mail não desfaz a cidade já criada).
+  // falha de e-mail não desfaz a cidade já criada). Leva a senha temporária.
   try {
-    await sendAdminInvite(tenant, user, actor);
+    await sendAdminInvite(tenant, user, actor, tempPassword);
   } catch (err) {
     console.error('[tenants] convite ao primeiro admin falhou:', err.message);
   }
@@ -291,7 +296,16 @@ async function resendInvite(id, emailOverride, actor = {}) {
     }
   }
 
-  await sendAdminInvite(tenant, user, actor);
+  // Reconvite REDEFINE a senha para uma nova temporária e reexige a troca no
+  // 1º acesso — assim o link do e-mail sempre dá acesso (a senha antiga pode
+  // já ter sido trocada/perdida).
+  const tempPassword = generateTempPassword();
+  await user.update({
+    passwordHash: await hashPassword(tempPassword),
+    mustChangePassword: true,
+  });
+
+  await sendAdminInvite(tenant, user, actor, tempPassword);
   return { tenant: serialize(tenant), admin: serializeAdmin(user), domain: computeDomain(tenant.subdomain) };
 }
 

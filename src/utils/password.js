@@ -19,4 +19,14 @@ function randomToken(bytes = 32) {
   return crypto.randomBytes(bytes).toString('hex');
 }
 
-module.exports = { hashPassword, comparePassword, randomToken };
+// Senha TEMPORÁRIA legível (convite): sem caracteres ambíguos (0/O, 1/l/I),
+// 10 chars com dígitos — fácil de ler/digitar. O convidado troca no 1º acesso.
+function generateTempPassword(len = 10) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789';
+  const bytes = crypto.randomBytes(len);
+  let out = '';
+  for (let i = 0; i < len; i += 1) out += chars[bytes[i] % chars.length];
+  return out;
+}
+
+module.exports = { hashPassword, comparePassword, randomToken, generateTempPassword };

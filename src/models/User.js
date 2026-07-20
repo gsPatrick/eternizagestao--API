@@ -17,6 +17,8 @@ module.exports = (sequelize, DataTypes) => {
         defaultValue: 'operador',
       },
       active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
+      // trocar senha no 1º acesso (admin criado com senha temporária no convite)
+      mustChangePassword: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
       lastLoginAt: { type: DataTypes.DATE },
     },
     {

@@ -37,7 +37,8 @@ const updateMe = catchAsync(async (req, res) => {
 
 // PATCH /me/password — troca a própria senha (exige a atual).
 const changeMyPassword = catchAsync(async (req, res) => {
-  requireFields(req.body, ['currentPassword', 'newPassword']);
+  // currentPassword é opcional no 1º acesso (senha temporária) — o serviço decide.
+  requireFields(req.body, ['newPassword']);
   const result = await service.changeMyPassword(req.user.id, {
     currentPassword: req.body.currentPassword,
     newPassword: req.body.newPassword,

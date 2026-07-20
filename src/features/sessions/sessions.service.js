@@ -23,6 +23,7 @@ function serializeUser(user) {
     name: user.name,
     email: user.email,
     role: user.role,
+    mustChangePassword: Boolean(user.mustChangePassword),
     lastLoginAt: user.lastLoginAt,
   };
 }
@@ -121,13 +122,18 @@ async function updateMe(userId, { name, email }) {
 async function changeMyPassword(userId, { currentPassword, newPassword }) {
   const user = await User.scope('withPassword').findByPk(userId);
   if (!user) throw AppError.notFound('Usuário não encontrado.');
-  if (!(await comparePassword(currentPassword || '', user.passwordHash))) {
-    throw AppError.unauthorized('Senha atual incorreta.', 'INVALID_PASSWORD');
+  // 1º acesso (senha temporária do convite): dispensa a reconferência da senha
+  // atual — o usuário acabou de autenticar com ela. Nos demais casos, exige.
+  if (!user.mustChangePassword) {
+    if (!(await comparePassword(currentPassword || '', user.passwordHash))) {
+      throw AppError.unauthorized('Senha atual incorreta.', 'INVALID_PASSWORD');
+    }
   }
   if (!newPassword || String(newPassword).length < 6) {
     throw AppError.badRequest('A nova senha deve ter ao menos 6 caracteres.', 'WEAK_PASSWORD');
   }
-  await user.update({ passwordHash: await hashPassword(newPassword) });
+  // troca a senha e LIMPA a obrigatoriedade do 1º acesso.
+  await user.update({ passwordHash: await hashPassword(newPassword), mustChangePassword: false });
   audit.record({
     action: 'atualizacao',
     entityType: 'Usuário',

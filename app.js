@@ -38,21 +38,15 @@ try {
 }
 if (compression) app.use(compression());
 
-// CORS: origens liberadas via env (lista separada por vírgula).
-// Em produção EXIGIMOS CORS_ORIGINS e NUNCA permitimos '*' (mesma postura do JWT_SECRET).
-// Em dev mantém '*' por conveniência.
-let corsOrigins;
-if (process.env.NODE_ENV === 'production') {
-  if (!process.env.CORS_ORIGINS) {
-    // decisão de segurança: nunca subir produção liberando qualquer origem
-    throw new Error('CORS_ORIGINS é obrigatório em produção.');
-  }
-  corsOrigins = process.env.CORS_ORIGINS.split(',').map((o) => o.trim());
-} else {
-  corsOrigins = process.env.CORS_ORIGINS
-    ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim())
-    : '*';
-}
+// CORS: sistema multi-tenant white-label — cada cidade pode ter o seu próprio
+// domínio/subdomínio, então por PADRÃO liberamos TODAS as origens. A segurança
+// real é o JWT + o tenant do token, não o CORS. Para restringir a uma lista,
+// defina CORS_ORIGINS (separada por vírgula); o valor '*' (ou vazio) libera geral.
+const rawCorsOrigins = (process.env.CORS_ORIGINS || '').trim();
+const corsOrigins =
+  !rawCorsOrigins || rawCorsOrigins === '*'
+    ? true // reflete qualquer Origin da requisição (equivalente a liberar todos)
+    : rawCorsOrigins.split(',').map((o) => o.trim());
 app.use(cors({ origin: corsOrigins }));
 
 // limite maior por causa de uploads em base64 (ortofotos, certidões, anexos).

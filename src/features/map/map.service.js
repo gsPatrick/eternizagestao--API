@@ -65,16 +65,17 @@ async function uploadOrthophoto(tenantId, cemeteryId, data) {
   assertCorners(data.corners);
   assertOpacity(data.opacity);
   let fileUrl = data.fileUrl;
-  if (data.contentBase64) {
+  if (data.content || data.contentBase64) {
     const saved = await storage.saveFile({
       tenantId,
       fileName: data.fileName || 'ortofoto.png',
-      contentBase64: data.contentBase64,
+      content: data.content, // Buffer (upload binário) — sem inchaço do base64
+      contentBase64: data.contentBase64, // compat (seed/integrações)
       mimeType: data.mimeType || 'image/png',
     });
     fileUrl = saved.fileUrl;
   }
-  if (!fileUrl) throw AppError.badRequest('Informe contentBase64 (arquivo) ou fileUrl.', 'MISSING_FILE');
+  if (!fileUrl) throw AppError.badRequest('Informe o arquivo (binário/base64) ou fileUrl.', 'MISSING_FILE');
 
   const ortho = await Orthophoto.create({
     tenantId, cemeteryId, fileUrl,

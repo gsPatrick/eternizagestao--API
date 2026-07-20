@@ -17,12 +17,22 @@ const listOrthophotos = catchAsync(async (req, res) => {
 });
 
 const uploadOrthophoto = catchAsync(async (req, res) => {
-  const data = pick(req.body, [
-    'name', 'contentBase64', 'fileName', 'mimeType', 'fileUrl', 'bounds', 'corners', 'opacity',
-    'widthPx', 'heightPx', 'resolutionCmPx', 'capturedAt', 'setActive',
-  ]);
-  // O painel envia só { cemeteryId, contentBase64, fileName, mimeType } — o
-  // nome exibível deriva do arquivo quando não vier explícito.
+  let data;
+  if (Buffer.isBuffer(req.body)) {
+    // Upload BINÁRIO: o arquivo cru veio no corpo; metadados na query/headers.
+    data = {
+      content: req.body,
+      fileName: req.query.fileName || 'ortofoto.png',
+      mimeType: req.headers['content-type'] || 'image/png',
+    };
+  } else {
+    // Compatibilidade: base64 em JSON (seed/integrações).
+    data = pick(req.body, [
+      'name', 'contentBase64', 'fileName', 'mimeType', 'fileUrl', 'bounds', 'corners', 'opacity',
+      'widthPx', 'heightPx', 'resolutionCmPx', 'capturedAt', 'setActive',
+    ]);
+  }
+  // Nome exibível deriva do arquivo quando não vier explícito.
   if (!data.name) data.name = data.fileName || 'Ortofoto';
   return created(res, await service.uploadOrthophoto(getTenantId(req), resolveCemeteryId(req), data));
 });

@@ -62,6 +62,22 @@ async function buildListWhere(tenantId, query) {
     }
     where[Op.or] = clauses;
   }
+
+  // filtro dedicado por PROPRIETÁRIO (nome OU CPF do titular da concessão ativa).
+  if (query.owner) {
+    const like = `%${query.owner}%`;
+    const rows = await Concession.findAll({
+      where: { tenantId, status: 'ativa' },
+      attributes: ['graveId'],
+      include: [{
+        model: Person, as: 'person', required: true, attributes: [],
+        where: { [Op.or]: [{ fullName: { [Op.iLike]: like } }, { cpf: { [Op.iLike]: like } }] },
+      }],
+    });
+    const ids = rows.map((r) => r.graveId).filter(Boolean);
+    // AND com os demais filtros; sem match → id impossível (nenhum resultado).
+    where.id = ids.length ? { [Op.in]: ids } : '00000000-0000-0000-0000-000000000000';
+  }
   return where;
 }
 

@@ -12,6 +12,7 @@
     "migrate:undo:all": "sequelize-cli db:migrate:undo:all",
     "db:create": "sequelize-cli db:create",
     "seed:dev": "node scripts/seed-dev.js",
+    "seed:fantasma": "node scripts/seed-fantasma.js",
     "seed:lauro": "node scripts/seed-lauro.js",
     "smoke:test": "node scripts/smoke-test.js",
     "worker": "node src/queues/worker.js"

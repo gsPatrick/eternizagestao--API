@@ -24,7 +24,7 @@ function inMonths(months) {
 }
 
 async function issue(tenantId, graveId, data, userId) {
-  return sequelize.transaction(async (transaction) => {
+  const concession = await sequelize.transaction(async (transaction) => {
     const grave = await Grave.findOne({ where: { id: graveId, tenantId }, transaction });
     if (!grave) throw AppError.notFound('Sepultura não encontrada.');
 
@@ -76,6 +76,31 @@ async function issue(tenantId, graveId, data, userId) {
     );
     return concession;
   });
+
+  // Auto-emissão da CERTIDÃO DE PERPETUIDADE quando a concessão é perpétua
+  // (§3.4/pedido do cliente: marcar perpétuo já gera a certidão para download).
+  // FORA da transação (o serviço de documentos abre a própria). Best-effort: uma
+  // falha na emissão não desfaz a concessão — dá para emitir a 2ª via depois.
+  if (concession.concessionType === 'perpetua') {
+    try {
+      const documents = require('../documents/documents.service');
+      await documents.issueFromRequest(
+        tenantId,
+        {
+          documentType: 'certidao_perpetuidade',
+          referenceType: 'concession',
+          referenceId: concession.id,
+          graveId: concession.graveId,
+          personId: concession.personId,
+        },
+        userId
+      );
+    } catch (err) {
+      console.error('[concessions] auto-emissão da certidão de perpetuidade falhou:', err.message);
+    }
+  }
+
+  return concession;
 }
 
 async function listByGrave(tenantId, graveId) {

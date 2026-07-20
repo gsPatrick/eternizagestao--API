@@ -76,6 +76,8 @@ const {
   GraveMaintenance,
 } = require('../src/models');
 const { hashPassword } = require('../src/utils/password');
+const storage = require('../src/providers/storage');
+const zlib = require('zlib');
 
 const PASSWORD = 'senha12345';
 
@@ -89,6 +91,46 @@ async function foc(Model, where, defaults = {}) {
     skipAudit: true,
   });
   return row;
+}
+
+// PNG sólido NxN de uma cor RGB (sem libs externas) → Buffer.
+function solidPng(size, [r, g, b]) {
+  const chunk = (type, data) => {
+    const body = Buffer.concat([Buffer.from(type), data]);
+    const len = Buffer.alloc(4); len.writeUInt32BE(data.length, 0);
+    const crc = Buffer.alloc(4); crc.writeUInt32BE(zlib.crc32(body) >>> 0, 0);
+    return Buffer.concat([len, body, crc]);
+  };
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0); ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8; ihdr[9] = 2; // bit depth 8, color type 2 (RGB)
+  const row = Buffer.concat([Buffer.from([0]), Buffer.concat(Array(size).fill(Buffer.from([r, g, b])))]);
+  const raw = Buffer.concat(Array(size).fill(row));
+  const sig = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  return Buffer.concat([sig, chunk('IHDR', ihdr), chunk('IDAT', zlib.deflateSync(raw)), chunk('IEND', Buffer.alloc(0))]);
+}
+
+// cor determinística a partir do nome (paleta navy/verde da identidade)
+function colorFor(seed) {
+  const palette = [[3, 46, 89], [26, 127, 92], [91, 138, 194], [154, 107, 21], [14, 28, 47], [176, 53, 53]];
+  let h = 0;
+  for (let i = 0; i < String(seed).length; i++) h = (h * 31 + String(seed).charCodeAt(i)) >>> 0;
+  return palette[h % palette.length];
+}
+
+// Garante uma foto de perfil para a pessoa (idempotente: só cria se faltar).
+// Usa o mesmo provider de storage do upload real → o painel exibe via /files.
+async function ensurePhoto(person) {
+  if (!person || person.photoUrl) return person;
+  const png = solidPng(96, colorFor(person.fullName || person.id));
+  const saved = await storage.saveFile({
+    tenantId: person.tenantId,
+    fileName: `avatar-${person.id}.png`,
+    contentBase64: png.toString('base64'),
+    mimeType: 'image/png',
+  });
+  await person.update({ photoUrl: saved.fileUrl }, { skipAudit: true });
+  return person;
 }
 
 const now = new Date();
@@ -434,31 +476,45 @@ async function seedGuarulhos(tenant, users) {
     { personId: titular.id, passwordHash: portalHash, status: 'ativo', lastLoginAt: daysAgo(2) }
   );
 
+  // Fotos de perfil (§3.3 — anexo de foto). Idempotente.
+  for (const p of [titular, maria, antonio, filhaTitular, carlos]) {
+    await ensurePhoto(p);
+  }
+
   // ---- Concessões ----
+  // proprietário = personId; responsável LEGAL = responsiblePersonId (distinto).
+  // Ana Paula e Carlos são RESPONSÁVEIS (não proprietários) → separam as views.
   const concJazigo1 = await foc(
     Concession,
     { tenantId: tenant.id, contractNumber: 'CON-2020-0001' },
     {
-      graveId: jazigo1.id, personId: titular.id, concessionType: 'perpetua',
+      graveId: jazigo1.id, personId: titular.id, responsiblePersonId: filhaTitular.id,
+      concessionType: 'perpetua',
       startDate: '2020-03-15', status: 'ativa', acquisitionMethod: 'emissao', value: 8500.0,
     }
   );
-  await foc(
+  const concJazigo2 = await foc(
     Concession,
     { tenantId: tenant.id, contractNumber: 'CON-2024-0007' },
     {
-      graveId: jazigo2.id, personId: maria.id, concessionType: 'temporaria',
+      graveId: jazigo2.id, personId: maria.id, responsiblePersonId: carlos.id,
+      concessionType: 'temporaria',
       startDate: '2024-01-10', endDate: addDaysYmd(35), status: 'ativa', acquisitionMethod: 'emissao', value: 2400.0,
     }
   );
-  await foc(
+  const concTumulo = await foc(
     Concession,
     { tenantId: tenant.id, contractNumber: 'CON-2019-0003' },
     {
-      graveId: tumulo.id, personId: antonio.id, concessionType: 'temporaria',
+      graveId: tumulo.id, personId: antonio.id,
+      concessionType: 'temporaria',
       startDate: '2019-05-01', endDate: addDaysYmd(-20), status: 'vencida', acquisitionMethod: 'regularizacao', value: 1800.0,
     }
   );
+  // garante o responsável mesmo em bases já semeadas (foc não atualiza existentes)
+  if (!concJazigo1.responsiblePersonId) await concJazigo1.update({ responsiblePersonId: filhaTitular.id }, { skipAudit: true });
+  if (!concJazigo2.responsiblePersonId) await concJazigo2.update({ responsiblePersonId: carlos.id }, { skipAudit: true });
+  void concTumulo;
 
   // ---- Sepultados + sepultamentos ----
   // 1) na gaveta ocupada do jazigo1 (sepultamento neste mês)

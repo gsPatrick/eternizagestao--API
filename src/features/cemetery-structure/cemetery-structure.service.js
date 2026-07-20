@@ -85,9 +85,14 @@ async function create(levelName, tenantId, parentId, data) {
 
 async function update(levelName, tenantId, id, data) {
   const record = await getById(levelName, tenantId, id);
-  // parentKey não é editável — mover de pai é operação estrutural (nova criação)
-  const { name, code, geoPolygon, notes } = data;
-  return record.update({ name, code, geoPolygon, notes });
+  // parentKey não é editável — mover de pai é operação estrutural (nova criação).
+  // PATCH parcial: só sobrescreve os campos presentes (ex.: salvar apenas
+  // geoPolygon ao demarcar a camada no mapa não pode zerar name/code).
+  const patch = {};
+  for (const key of ['name', 'code', 'geoPolygon', 'notes']) {
+    if (data[key] !== undefined) patch[key] = data[key];
+  }
+  return record.update(patch);
 }
 
 async function remove(levelName, tenantId, id) {

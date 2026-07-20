@@ -11,7 +11,7 @@ const {
 } = require('../../models');
 
 const CREATE_FIELDS = [
-  'personId', 'concessionType', 'contractNumber', 'startDate', 'endDate', 'value', 'notes',
+  'personId', 'responsiblePersonId', 'concessionType', 'contractNumber', 'startDate', 'endDate', 'value', 'notes',
 ];
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -37,6 +37,14 @@ async function issue(tenantId, graveId, data, userId) {
 
     const person = await Person.findOne({ where: { id: data.personId, tenantId }, transaction });
     if (!person) throw AppError.notFound('Pessoa não encontrada.');
+
+    // responsável legal (opcional) — se informado, precisa existir no tenant
+    if (data.responsiblePersonId) {
+      const responsible = await Person.findOne({
+        where: { id: data.responsiblePersonId, tenantId }, transaction,
+      });
+      if (!responsible) throw AppError.notFound('Responsável não encontrado.');
+    }
 
     const concession = await Concession.create(
       {
@@ -75,7 +83,10 @@ async function listByGrave(tenantId, graveId) {
   if (!grave) throw AppError.notFound('Sepultura não encontrada.');
   return Concession.findAll({
     where: { tenantId, graveId },
-    include: [{ model: Person, as: 'person' }],
+    include: [
+      { model: Person, as: 'person' },
+      { model: Person, as: 'responsible' },
+    ],
     order: [['startDate', 'DESC']],
   });
 }
@@ -112,6 +123,7 @@ async function list(tenantId, query) {
     order: [['startDate', 'DESC']],
     include: [
       { model: Person, as: 'person' },
+      { model: Person, as: 'responsible' },
       { model: Grave, as: 'grave', attributes: ['id', 'code'] },
     ],
     subQuery: false,
@@ -157,6 +169,7 @@ async function getById(tenantId, id, { transaction } = {}) {
     where: { id, tenantId },
     include: [
       { model: Person, as: 'person' },
+      { model: Person, as: 'responsible' },
       {
         model: Grave, as: 'grave',
         include: [

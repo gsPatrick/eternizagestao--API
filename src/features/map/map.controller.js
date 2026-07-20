@@ -17,16 +17,20 @@ const listOrthophotos = catchAsync(async (req, res) => {
 });
 
 const uploadOrthophoto = catchAsync(async (req, res) => {
-  requireFields(req.body, ['name']);
   const data = pick(req.body, [
     'name', 'contentBase64', 'fileName', 'mimeType', 'fileUrl', 'bounds', 'corners', 'opacity',
     'widthPx', 'heightPx', 'resolutionCmPx', 'capturedAt', 'setActive',
   ]);
+  // O painel envia só { cemeteryId, contentBase64, fileName, mimeType } — o
+  // nome exibível deriva do arquivo quando não vier explícito.
+  if (!data.name) data.name = data.fileName || 'Ortofoto';
   return created(res, await service.uploadOrthophoto(getTenantId(req), resolveCemeteryId(req), data));
 });
 
 const updateOrthophoto = catchAsync(async (req, res) => {
   const data = pick(req.body, ['name', 'bounds', 'corners', 'opacity', 'widthPx', 'heightPx', 'resolutionCmPx', 'capturedAt', 'isActive']);
+  // alias do painel: { active } ≡ { isActive }
+  if (data.isActive === undefined && req.body.active !== undefined) data.isActive = Boolean(req.body.active);
   return ok(res, await service.updateOrthophoto(getTenantId(req), req.params.id, data));
 });
 

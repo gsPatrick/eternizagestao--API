@@ -80,6 +80,20 @@ function lotInclude(query) {
   return { model: Lot, as: 'lot', required, include: [streetInclude] };
 }
 
+// include APENAS para filtrar (quadra/rua) sem selecionar colunas — necessário
+// em queries agrupadas (statusCounts): trazer colunas do lote/rua/quadra sem
+// pô-las no GROUP BY quebra o Postgres ("column lot.id must appear in GROUP BY").
+function lotFilterInclude(query) {
+  const blockInclude = { model: Block, as: 'block', attributes: [], required: true };
+  if (query.blockId) blockInclude.where = { id: query.blockId };
+  const streetInclude = {
+    model: Street, as: 'street', attributes: [], required: true,
+    include: [blockInclude],
+  };
+  if (query.streetId) streetInclude.where = { id: query.streetId };
+  return { model: Lot, as: 'lot', attributes: [], required: true, include: [streetInclude] };
+}
+
 async function list(tenantId, query) {
   const { page, perPage, limit, offset } = getPagination(query, { defaultPerPage: 30 });
   const where = await buildListWhere(tenantId, query);
@@ -137,7 +151,7 @@ async function statusCounts(tenantId, query) {
   const grouped = await Grave.findAll({
     where,
     attributes: ['statusId', [sequelize.fn('COUNT', sequelize.col('Grave.id')), 'total']],
-    include: (query.blockId || query.streetId) ? [lotInclude(query)] : [],
+    include: (query.blockId || query.streetId) ? [lotFilterInclude(query)] : [],
     group: ['statusId'],
     raw: true,
   });

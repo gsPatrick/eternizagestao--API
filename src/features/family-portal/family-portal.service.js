@@ -410,6 +410,7 @@ async function listGraves(tenantId, personId) {
       code: g ? g.code : null,
       unitType: g ? g.unitType : null,
       cemetery: g && g.cemetery ? g.cemetery.name : null,
+      cemeteryId: g ? g.cemeteryId : null,
       concessionType: c.concessionType,
       contractNumber: c.contractNumber,
       startDate: c.startDate,
@@ -420,6 +421,10 @@ async function listGraves(tenantId, personId) {
         street: street ? street.name : null,
         lot: lot ? lot.code : null,
       },
+      // geometria REAL (lat/lng) para o mapa do portal (PublicCemeteryMap)
+      geoPolygon: g ? g.geoPolygon : null,
+      latitude: g ? g.latitude : null,
+      longitude: g ? g.longitude : null,
       deceased,
       timeline,
     };

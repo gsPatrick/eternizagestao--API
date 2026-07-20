@@ -76,7 +76,8 @@ function roleExists(role) {
     case 'proprietario':
       return literal('EXISTS (SELECT 1 FROM concessions c WHERE c.person_id = "Person".id AND c.tenant_id = "Person".tenant_id AND c.deleted_at IS NULL)');
     case 'responsavel':
-      return literal('EXISTS (SELECT 1 FROM maintenance_fees mf WHERE mf.payer_person_id = "Person".id AND mf.tenant_id = "Person".tenant_id)');
+      // responsável LEGAL de alguma concessão (§3.2) — distinto do proprietário.
+      return literal('EXISTS (SELECT 1 FROM concessions c WHERE c.responsible_person_id = "Person".id AND c.tenant_id = "Person".tenant_id AND c.deleted_at IS NULL)');
     case 'familiar':
       return literal('EXISTS (SELECT 1 FROM person_relationships pr WHERE pr.tenant_id = "Person".tenant_id AND (pr.person_id = "Person".id OR pr.related_person_id = "Person".id))');
     case 'portal':
@@ -112,11 +113,17 @@ async function annotate(tenantId, people) {
   const ids = people.map((p) => p.id);
   if (!ids.length) return [];
 
-  const [concCounts, relOwner, relRelated, portals, feePayers] = await Promise.all([
+  const [concCounts, respCounts, relOwner, relRelated, portals] = await Promise.all([
     Concession.findAll({
       where: { tenantId, personId: { [Op.in]: ids } },
       attributes: ['personId', [fn('COUNT', col('id')), 'count']],
       group: ['personId'], raw: true,
+    }),
+    // concessões onde a pessoa é o RESPONSÁVEL legal (papel 'responsavel')
+    Concession.findAll({
+      where: { tenantId, responsiblePersonId: { [Op.in]: ids } },
+      attributes: ['responsiblePersonId', [fn('COUNT', col('id')), 'count']],
+      group: ['responsiblePersonId'], raw: true,
     }),
     PersonRelationship.findAll({
       where: { tenantId, personId: { [Op.in]: ids } },
@@ -130,29 +137,27 @@ async function annotate(tenantId, people) {
       where: { tenantId, personId: { [Op.in]: ids } },
       attributes: ['personId', 'status', 'email', 'createdAt'], raw: true,
     }),
-    MaintenanceFee.findAll({
-      where: { tenantId, payerPersonId: { [Op.in]: ids } },
-      attributes: ['payerPersonId'], group: ['payerPersonId'], raw: true,
-    }),
   ]);
 
   const concMap = {};
   concCounts.forEach((r) => { concMap[r.personId] = Number(r.count); });
+  const respMap = {};
+  respCounts.forEach((r) => { respMap[r.responsiblePersonId] = Number(r.count); });
   const familiarSet = new Set([
     ...relOwner.map((r) => r.personId),
     ...relRelated.map((r) => r.relatedPersonId),
   ]);
-  const responsavelSet = new Set(feePayers.map((r) => r.payerPersonId));
   const portalMap = {};
   portals.forEach((a) => { portalMap[a.personId] = a; });
 
   return people.map((p) => {
     const json = p.toJSON();
     const concessionsCount = concMap[p.id] || 0;
+    const responsibleCount = respMap[p.id] || 0;
     const account = portalMap[p.id] || null;
     const roles = [];
     if (concessionsCount > 0) roles.push('proprietario');
-    if (responsavelSet.has(p.id)) roles.push('responsavel');
+    if (responsibleCount > 0) roles.push('responsavel');
     if (familiarSet.has(p.id)) roles.push('familiar');
     return {
       ...json,
@@ -160,6 +165,7 @@ async function annotate(tenantId, people) {
       photoUrl: signPhoto(json.photoUrl),
       roles,
       concessionsCount,
+      responsibleCount,
       portal: portalSummary(account),
     };
   });
@@ -214,6 +220,15 @@ async function getById(tenantId, id) {
         attributes: ['id', 'graveId', 'concessionType', 'contractNumber', 'startDate', 'endDate', 'status'],
         include: [{ model: Grave, as: 'grave', attributes: ['id', 'code'] }],
       },
+      {
+        // concessões onde a pessoa é o RESPONSÁVEL legal (não o proprietário)
+        model: Concession, as: 'responsibleConcessions',
+        attributes: ['id', 'graveId', 'concessionType', 'contractNumber', 'startDate', 'endDate', 'status'],
+        include: [
+          { model: Grave, as: 'grave', attributes: ['id', 'code'] },
+          { model: Person, as: 'person', attributes: ['id', 'fullName'] },
+        ],
+      },
       { model: FamilyPortalAccount, as: 'portalAccount' },
     ],
     order: [[{ model: Concession, as: 'concessions' }, 'startDate', 'DESC']],
@@ -222,6 +237,12 @@ async function getById(tenantId, id) {
   const json = person.toJSON();
   json.portal = portalSummary(person.portalAccount);
   json.photoUrl = signPhoto(json.photoUrl); // assinado (só se local /files/...)
+  // papéis derivados (o detalhe também precisa dos badges de vínculo)
+  const roles = [];
+  if ((json.concessions || []).length) roles.push('proprietario');
+  if ((json.responsibleConcessions || []).length) roles.push('responsavel');
+  if ((json.relationships || []).length) roles.push('familiar');
+  json.roles = roles;
   return json;
 }
 

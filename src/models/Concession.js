@@ -9,7 +9,10 @@ module.exports = (sequelize, DataTypes) => {
       id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
       tenantId: { type: DataTypes.UUID, allowNull: false },
       graveId: { type: DataTypes.UUID, allowNull: false },
-      personId: { type: DataTypes.UUID, allowNull: false },
+      personId: { type: DataTypes.UUID, allowNull: false }, // concessionário/PROPRIETÁRIO
+      // Responsável LEGAL pelo jazigo (contato/manutenção/obrigações). Pode ser
+      // distinto do proprietário — é o que separa /proprietarios de /responsaveis.
+      responsiblePersonId: { type: DataTypes.UUID, allowNull: true },
       concessionType: { type: DataTypes.ENUM('perpetua', 'temporaria'), allowNull: false },
       contractNumber: { type: DataTypes.STRING(50) },
       startDate: { type: DataTypes.DATEONLY, allowNull: false },

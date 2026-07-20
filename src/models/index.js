@@ -147,6 +147,10 @@ Concession.belongsTo(Grave, { foreignKey: 'graveId', as: 'grave' });
 Person.hasMany(Concession, { foreignKey: 'personId', as: 'concessions' });
 Concession.belongsTo(Person, { foreignKey: 'personId', as: 'person' });
 
+// responsável legal da concessão (distinto do proprietário/person)
+Person.hasMany(Concession, { foreignKey: 'responsiblePersonId', as: 'responsibleConcessions' });
+Concession.belongsTo(Person, { foreignKey: 'responsiblePersonId', as: 'responsible' });
+
 Grave.hasMany(ConcessionTransfer, { foreignKey: 'graveId', as: 'concessionTransfers' });
 ConcessionTransfer.belongsTo(Grave, { foreignKey: 'graveId', as: 'grave' });
 ConcessionTransfer.belongsTo(Concession, { foreignKey: 'fromConcessionId', as: 'fromConcession' });

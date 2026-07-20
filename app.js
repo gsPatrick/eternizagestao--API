@@ -1,0 +1,191 @@
+'use strict';
+
+// Entrada da aplicação: .env, Express, middlewares globais, rotas, erro, listen.
+// Regras de negócio NÃO vivem aqui — ver src/features/.
+require('dotenv').config();
+
+const express = require('express');
+const cors = require('cors');
+
+const routes = require('./src/routes');
+const { notFoundHandler, errorHandler } = require('./src/middlewares/error-handler');
+
+const app = express();
+
+// Atrás de proxy/load balancer (Nginx, ELB, Cloudflare): confia em X-Forwarded-For
+// para que o rate-limit e logs enxerguem o IP real do cliente, não o do proxy.
+// TRUST_PROXY_HOPS = número de proxies confiáveis à frente da app.
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS || 1));
+
+// Não expor o header X-Powered-By (reduz superfície de fingerprinting).
+app.disable('x-powered-by');
+
+// Hardening de headers HTTP e compressão de resposta.
+// try-require gracioso: o app sobe mesmo se a dep ainda não estiver instalada.
+let helmet;
+try {
+  helmet = require('helmet');
+} catch {
+  // dep opcional ausente — segue sem hardening de headers
+}
+if (helmet) app.use(helmet());
+
+let compression;
+try {
+  compression = require('compression');
+} catch {
+  // dep opcional ausente — segue sem compressão
+}
+if (compression) app.use(compression());
+
+// CORS: origens liberadas via env (lista separada por vírgula).
+// Em produção EXIGIMOS CORS_ORIGINS e NUNCA permitimos '*' (mesma postura do JWT_SECRET).
+// Em dev mantém '*' por conveniência.
+let corsOrigins;
+if (process.env.NODE_ENV === 'production') {
+  if (!process.env.CORS_ORIGINS) {
+    // decisão de segurança: nunca subir produção liberando qualquer origem
+    throw new Error('CORS_ORIGINS é obrigatório em produção.');
+  }
+  corsOrigins = process.env.CORS_ORIGINS.split(',').map((o) => o.trim());
+} else {
+  corsOrigins = process.env.CORS_ORIGINS
+    ? process.env.CORS_ORIGINS.split(',').map((o) => o.trim())
+    : '*';
+}
+app.use(cors({ origin: corsOrigins }));
+
+// limite maior por causa de uploads em base64 (ortofotos, certidões, anexos).
+// verify captura o corpo BRUTO em req.rawBody (Buffer) para verificação HMAC
+// de webhooks — providers validam a assinatura sobre esse buffer intacto.
+app.use(
+  express.json({
+    limit: '25mb',
+    verify: (req, res, buf) => {
+      req.rawBody = buf;
+    },
+  })
+);
+app.use(express.urlencoded({ extended: true }));
+
+// Arquivos do storage local (certidões, exports com CPF, ortofotos, anexos).
+// LGPD: NÃO servimos mais como estático aberto — a leitura exige uma URL
+// ASSINADA (HMAC token+exp, ver storage.signedUrl) OU uma sessão autenticada
+// cujo tenant case com o prefixo <tenantId>/ do caminho. Preserva o isolamento
+// por tenant e mantém compat com o rewrite /files/:path* do next (a query
+// ?token&exp passa pelo proxy).
+const path = require('path');
+const fs = require('fs');
+const storage = require('./src/providers/storage');
+const { verifyToken } = require('./src/utils/jwt');
+
+app.use(storage.PUBLIC_PREFIX, (req, res) => {
+  // Só GET/HEAD leem arquivos.
+  if (req.method !== 'GET' && req.method !== 'HEAD') return res.status(405).end();
+
+  // Caminho relativo pedido (após o mount /files), já decodificado.
+  let relPath;
+  try {
+    relPath = decodeURIComponent(req.path.replace(/^\/+/, ''));
+  } catch {
+    return res.status(404).end();
+  }
+  if (!relPath) return res.status(404).end();
+
+  // Barreira anti path traversal: o alvo tem que ficar dentro de LOCAL_DIR.
+  const fullPath = path.resolve(storage.LOCAL_DIR, relPath);
+  if (fullPath !== storage.LOCAL_DIR && !fullPath.startsWith(storage.LOCAL_DIR + path.sep)) {
+    return res.status(404).end();
+  }
+
+  let authorized = false;
+
+  // 1) URL assinada (token+exp) — caminho usado pelo visualizador (iframe/img,
+  //    sem header Authorization) e pelos downloads públicos.
+  const { token, exp } = req.query;
+  if (token && exp && storage.verifySignedUrl(relPath, token, exp)) {
+    authorized = true;
+  }
+
+  // 2) Alternativa: sessão administrativa (Bearer) cujo tenant case com o
+  //    prefixo <tenantId>/ do caminho (isolamento multi-tenant preservado).
+  if (!authorized) {
+    const [scheme, bearer] = (req.headers.authorization || '').split(' ');
+    if (scheme === 'Bearer' && bearer) {
+      try {
+        const payload = verifyToken(bearer);
+        const tenantSeg = relPath.split('/')[0];
+        if (payload.kind === 'user' && payload.tenantId && payload.tenantId === tenantSeg) {
+          authorized = true;
+        }
+      } catch {
+        // token inválido/expirado — segue negando
+      }
+    }
+  }
+
+  if (!authorized) return res.status(403).end();
+
+  if (!fs.existsSync(fullPath) || !fs.statSync(fullPath).isFile()) {
+    return res.status(404).end();
+  }
+  return res.sendFile(fullPath);
+});
+
+// Todas as rotas públicas sob o prefixo da API (ex.: /api/v1/...)
+// audit: registra toda mutação bem-sucedida em audit_logs (rastreabilidade)
+const audit = require('./src/middlewares/audit');
+const apiPrefix = process.env.APP_API_PREFIX || '/api';
+app.use(apiPrefix, audit, routes);
+
+// 404 + handler de erro único (sempre por último)
+app.use(notFoundHandler);
+app.use(errorHandler);
+
+// Sobe o servidor apenas quando executado diretamente (permite importar em testes)
+if (require.main === module) {
+  const port = Number(process.env.APP_PORT) || 3000;
+  const { sequelize } = require('./src/models');
+
+  const server = app.listen(port, async () => {
+    console.log(`Eterniza Gestão API ouvindo na porta ${port} (prefixo ${apiPrefix})`);
+    try {
+      await sequelize.authenticate();
+      console.log('Conexão com o PostgreSQL estabelecida.');
+    } catch (err) {
+      console.error('Falha ao conectar no PostgreSQL:', err.message);
+    }
+  });
+
+  // Graceful shutdown: para de aceitar novas conexões, drena as em andamento,
+  // fecha o pool do Sequelize e sai. Timeout de segurança evita travar o deploy.
+  let shuttingDown = false;
+  const shutdown = (signal) => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.log(`Recebido ${signal}: iniciando graceful shutdown...`);
+
+    const forceTimer = setTimeout(() => {
+      console.error('Timeout de shutdown (10s): forçando saída.');
+      process.exit(1);
+    }, 10_000);
+    forceTimer.unref();
+
+    server.close(async () => {
+      try {
+        await sequelize.close();
+        console.log('Pool do PostgreSQL encerrado. Encerrando processo.');
+      } catch (err) {
+        console.error('Erro ao fechar o Sequelize:', err.message);
+      } finally {
+        clearTimeout(forceTimer);
+        process.exit(0);
+      }
+    });
+  };
+
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
+}
+
+module.exports = app;

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="pt-BR" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="x-apple-disable-message-reformatting" />
+  <title>{{subject}}</title>
+  <!--[if mso]><style>* { font-family: Arial, sans-serif !important; }</style><![endif]-->
+</head>
+<body style="margin:0; padding:0; background-color:{{accent_deep}}; -webkit-text-size-adjust:100%; -ms-text-size-adjust:100%;">
+  <!-- pré-header (prévia invisível na caixa de entrada) -->
+  <div style="display:none; max-height:0; overflow:hidden; opacity:0; color:{{accent_deep}};">{{preheader}}&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;&nbsp;&zwnj;</div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:{{accent_deep}};">
+    <tr>
+      <td align="center" style="padding:40px 16px;">
+        <table role="presentation" width="680" cellpadding="0" cellspacing="0" border="0" style="width:680px; max-width:680px; margin:0 auto;">
+          <tr>
+            <!-- CAIXA ÚNICA navy com o VISUAL DO LOGIN (gradiente + anéis + glow) -->
+            <td style="position:relative; overflow:hidden; border-radius:22px; background-color:{{accent}}; background-image: radial-gradient(900px 600px at 18% 8%, {{accent_glow}}, transparent 55%), radial-gradient(1100px 700px at 90% 100%, {{accent_shadow}}, transparent 70%), linear-gradient(155deg, {{accent_bright}} 0%, {{accent}} 42%, {{accent_deep}} 100%);">
+
+              <!-- ===== BOLAS DO LOGIN (decorativas) ===== -->
+              <!-- anéis concêntricos, canto inferior direito -->
+              <div style="position:absolute; right:-170px; bottom:-210px; width:600px; height:600px; border-radius:50%; border:1px solid rgba(255,255,255,0.14); box-shadow:0 0 0 85px rgba(255,255,255,0.035), 0 0 0 190px rgba(255,255,255,0.022), 0 0 0 310px rgba(255,255,255,0.012); pointer-events:none;">&nbsp;</div>
+              <!-- glow flutuante (cor da cidade), à esquerda -->
+              <div style="position:absolute; left:-120px; top:28%; width:440px; height:440px; border-radius:50%; background:radial-gradient(closest-side, {{accent_glow_soft}}, transparent); pointer-events:none;">&nbsp;</div>
+
+              <!-- ===== CONTEÚDO (acima das bolas) ===== -->
+              <div style="position:relative;">
+
+                <!-- cabeçalho: a marca DA CIDADE (logo + nome) -->
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="padding:46px 48px 12px 48px; text-align:center;">
+                      {{brand_mark}}
+                      <span style="display:inline-block; vertical-align:middle; margin-left:11px; font-family:Georgia,'Times New Roman',serif; font-size:27px; font-weight:600; letter-spacing:-0.5px; color:#ffffff;">
+                        {{tenant_name}}
+                      </span>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="padding:0 48px 10px 48px; text-align:center; font-family:Arial,Helvetica,sans-serif; font-size:12px; letter-spacing:0.6px; text-transform:uppercase; color:rgba(255,255,255,0.55);">
+                      Gestão de Cemitérios
+                    </td>
+                  </tr>
+                </table>
+
+                <!-- corpo (texto branco sobre azul) -->
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="padding:28px 48px 34px 48px; font-family:Arial,Helvetica,sans-serif; color:rgba(255,255,255,0.82);">
+                      {{body}}
+                    </td>
+                  </tr>
+                </table>
+
+                <!-- rodapé -->
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td style="padding:0 48px 42px 48px; font-family:Arial,Helvetica,sans-serif;">
+                      <div style="border-top:1px solid {{accent_border}}; padding-top:22px;">
+                        <p style="margin:0 0 6px 0; font-size:12.5px; line-height:1.6; color:rgba(255,255,255,0.55);">{{footer_note}}</p>
+                        <p style="margin:0; font-size:12.5px; line-height:1.6; color:rgba(255,255,255,0.55);">Este é um e-mail automático do <strong style="color:rgba(255,255,255,0.82);">Eterniza Gestão</strong> — não responda a esta mensagem.</p>
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+
+              </div>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:20px 8px 0 8px; text-align:center; font-family:Arial,Helvetica,sans-serif; font-size:11.5px; color:rgba(255,255,255,0.45);">
+              © {{year}} Eterniza Gestão · plataforma de gestão de cemitérios
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>

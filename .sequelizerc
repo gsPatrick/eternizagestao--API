@@ -1,0 +1,12 @@
+'use strict';
+
+// Aponta o sequelize-cli para a estrutura de pastas do projeto
+// (config em src/config, models em src/models, migrations na raiz).
+const path = require('path');
+
+module.exports = {
+  config: path.resolve(__dirname, 'src', 'config', 'database.js'),
+  'models-path': path.resolve(__dirname, 'src', 'models'),
+  'migrations-path': path.resolve(__dirname, 'migrations'),
+  'seeders-path': path.resolve(__dirname, 'seeders'),
+};

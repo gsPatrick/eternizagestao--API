@@ -112,6 +112,9 @@ function serializeAdmin(user) {
 async function sendAdminInvite(tenant, user, actor = {}, tempPassword = null) {
   await notifications.notify({
     tenantId: tenant.id,
+    // Disparo da PLATAFORMA (super_admin criando a cidade) → marca AZUL (Eterniza)
+    // + remetente da plataforma (Resend), NÃO a cor da cidade.
+    platform: true,
     recipientUserId: user.id,
     contact: user.email,
     channel: 'email',

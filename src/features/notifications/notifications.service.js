@@ -211,27 +211,43 @@ async function dispatchOne(payload) {
       const email = getEmailProvider();
       if (!email) throw new Error('Provider de e-mail indisponível');
 
-      const tenant = await loadTenant(notification.tenantId);
+      // PLATAFORMA (super_admin): marca AZUL (Eterniza) + remetente da plataforma
+      // (Resend), sem cor/SMTP da cidade. CIDADE: marca e SMTP próprios.
+      const isPlatform = Boolean(payload.platform);
+      const tenant = isPlatform ? null : await loadTenant(notification.tenantId);
       const template = payload.template || templateFor(notification.notificationType);
       const vars = payload.vars || varsFromRecord(notification);
       const rendered = renderEmail(template, vars, { tenant });
 
       // SMTP DA CIDADE (em claro, server-side); sem config → driver mock/log.
-      const config = await integrationConfig(notification.tenantId);
+      // Disparo de plataforma força o remetente global (não usa SMTP da cidade).
+      const config = isPlatform ? null : await integrationConfig(notification.tenantId);
       const tenantSmtp = config ? config.smtp : null;
+      const driverName = email.resolveDriver ? email.resolveDriver(tenantSmtp).name : 'email';
 
-      const { providerMessageId } = await email.sendEmail(tenantSmtp, {
-        to: notification.recipientContact,
-        subject: notification.subject || rendered.subject,
-        html: rendered.html,
-        text: rendered.text,
-      });
-      await notification.update({
-        status: 'enviada',
-        sentAt: new Date(),
-        provider: email.resolveDriver ? email.resolveDriver(tenantSmtp).name : 'email',
-        providerMessageId,
-      });
+      console.log(
+        `[email] enviando → ${notification.recipientContact} | template=${template} | driver=${driverName} | plataforma=${isPlatform}`
+      );
+      try {
+        const { providerMessageId } = await email.sendEmail(tenantSmtp, {
+          to: notification.recipientContact,
+          subject: notification.subject || rendered.subject,
+          html: rendered.html,
+          text: rendered.text,
+        });
+        console.log(`[email] OK → ${notification.recipientContact} | driver=${driverName} | id=${providerMessageId}`);
+        await notification.update({
+          status: 'enviada',
+          sentAt: new Date(),
+          provider: driverName,
+          providerMessageId,
+        });
+      } catch (sendErr) {
+        console.error(
+          `[email] FALHA → ${notification.recipientContact} | driver=${driverName} | erro: ${sendErr.message}`
+        );
+        throw sendErr;
+      }
     } else {
       // whatsapp (sms cai aqui por ora — mesmo canal textual). Usa a instância
       // Evolution DA CIDADE. Falha (desconectado/sem Evolution) é AMIGÁVEL e
@@ -338,7 +354,9 @@ async function notify(input) {
     await enqueue(
       QUEUE,
       JOB_DISPATCH,
-      { id: notification.id, template, vars },
+      // `platform:true` → disparo da PLATAFORMA (super_admin): marca AZUL +
+      // remetente da plataforma (Resend), ignorando a cor/SMTP da cidade.
+      { id: notification.id, template, vars, platform: Boolean(input.platform) },
       dispatchHandler
     );
   } catch (err) {

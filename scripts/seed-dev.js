@@ -707,6 +707,34 @@ async function seedGuarulhos(tenant, users) {
     }
   );
 
+  // Eventos PÚBLICOS FUTUROS (velório/sepultamento) — garantem que a AGENDA
+  // PÚBLICA sempre tenha próximos eventos (os "de hoje" viram passado no dia).
+  const fut = (days, hour, min = 0) => new Date(Date.UTC(Y, M, D + days, hour, min, 0));
+  await foc(
+    Schedule,
+    { tenantId: tenant.id, title: 'Velório — Rosa Maria Oliveira' },
+    {
+      cemeteryId: cemMain.id, chapelId: capela1.id, deceasedId: decAvo.id, responsiblePersonId: titular.id,
+      scheduleType: 'velorio', startsAt: fut(1, 15), endsAt: fut(1, 18), status: 'confirmado', createdByUserId: operadorId,
+    }
+  );
+  await foc(
+    Schedule,
+    { tenantId: tenant.id, title: 'Sepultamento — Benedito Alves Costa' },
+    {
+      cemeteryId: cemMain.id, chapelId: capela2.id, graveId: covas[0].id, deceasedId: decEsposa.id, responsiblePersonId: antonio.id,
+      scheduleType: 'sepultamento', startsAt: fut(2, 10), endsAt: fut(2, 11, 30), status: 'agendado', createdByUserId: operadorId,
+    }
+  );
+  await foc(
+    Schedule,
+    { tenantId: tenant.id, title: 'Velório — Sebastião Pereira Lima' },
+    {
+      cemeteryId: cemMain.id, chapelId: capela1.id, deceasedId: decAvo.id, responsiblePersonId: antonio.id,
+      scheduleType: 'velorio', startsAt: fut(5, 9), endsAt: fut(5, 12), status: 'agendado', createdByUserId: operadorId,
+    }
+  );
+
   // ---- Ossário + nichos + depósito ----
   const ossuary = await foc(
     Ossuary,

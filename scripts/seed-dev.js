@@ -877,6 +877,50 @@ async function main() {
 
   // --- super admin da plataforma ---
   await upsertUser({ email: 'super@eterniza.dev', name: 'Super Admin', role: 'super_admin', tenantId: null });
+  // super_admin oficial de suporte (remetente da plataforma no Resend)
+  await upsertUser({ email: 'suporte@eternizagestao.com.br', name: 'Suporte Eterniza', role: 'super_admin', tenantId: null });
+
+  // --- cidade FANTASMA (ambiente de teste do super_admin) ---
+  const fantasma = await foc(
+    Tenant,
+    { subdomain: 'fantasma' },
+    {
+      name: 'Cidade Fantasma',
+      legalName: 'Prefeitura de Cidade Fantasma — Serviços Funerários',
+      cnpj: '00.000.000/0001-00',
+      email: 'contato@fantasma.eternizagestao.com.br',
+      phone: '+551100000000',
+      primaryColor: '#4b5563',
+      secondaryColor: '#9ca3af',
+      addressCity: 'Cidade Fantasma',
+      addressState: 'SP',
+      onboardingStatus: 'concluido',
+      settings: { fqdn: 'fantasma.eternizagestao.com.br', isDefault: false },
+      active: true,
+    }
+  );
+  await upsertUser({ email: 'admin@fantasma.eternizagestao.com.br', name: 'Admin Fantasma', role: 'admin', tenantId: fantasma.id });
+  // cemitério mínimo (com entrada GPS) para testar mapa/ortofoto/estrutura
+  const cemF = await foc(
+    Cemetery,
+    { tenantId: fantasma.id, code: 'CEM-FANTASMA-01' },
+    {
+      name: 'Cemitério Central de Cidade Fantasma',
+      addressCity: 'Cidade Fantasma', addressState: 'SP',
+      entranceLatitude: -12.2664, entranceLongitude: -38.9663, // Itaberaba/BA (teste)
+      managerName: 'Prefeitura de Cidade Fantasma',
+    }
+  );
+  const blkF = await foc(Block, { cemeteryId: cemF.id, code: 'A' }, { tenantId: fantasma.id, name: 'Quadra A' });
+  const stF = await foc(Street, { blockId: blkF.id, code: 'R1' }, { tenantId: fantasma.id, cemeteryId: cemF.id, name: 'Rua 1' });
+  const lotF = await foc(Lot, { streetId: stF.id, code: 'L1' }, { tenantId: fantasma.id, cemeteryId: cemF.id, name: 'Lote 1' });
+  for (let i = 1; i <= 2; i += 1) {
+    await foc(
+      Grave,
+      { cemeteryId: cemF.id, code: `COVA-${String(i).padStart(3, '0')}` },
+      { tenantId: fantasma.id, lotId: lotF.id, unitType: 'cova', statusId: STATUS.livre.id, capacity: 1 }
+    );
+  }
 
   // --- guarulhos (PADRÃO / cheio) ---
   const guarulhos = await upsertTenant('guarulhos', { isDefault: true });

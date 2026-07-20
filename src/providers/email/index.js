@@ -60,7 +60,8 @@ function platformResendConfig() {
   if (!apiKey || !apiKey.trim()) return null;
   return {
     apiKey: apiKey.trim(),
-    fromEmail: process.env.EMAIL_FROM || 'no-reply@eternizagestao.com.br',
+    // Remetente da PLATAFORMA (super_admin/suporte). Trocável por env EMAIL_FROM.
+    fromEmail: process.env.EMAIL_FROM || 'suporte@eternizagestao.com.br',
     fromName: process.env.EMAIL_FROM_NAME || 'Eterniza Gestão',
   };
 }

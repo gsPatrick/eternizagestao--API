@@ -197,6 +197,19 @@ async function create(payload = {}, actor = {}) {
     );
   }
 
+  // O índice UNIQUE de `subdomain` também enxerga linhas SOFT-DELETED. Cidades
+  // apagadas ANTES do release que passou a liberar o subdomínio no remove()
+  // continuam segurando o nome — e o erro "já está em uso" aparecia mesmo sem
+  // nenhuma cidade ativa com ele. Aqui liberamos essas sobras renomeando-as.
+  const deletedHolding = await Tenant.findAll({
+    where: { subdomain }, paranoid: false,
+  });
+  for (const old of deletedHolding) {
+    if (!old.deletedAt) continue; // ativa não passa por aqui (barrado acima)
+    const freed = `${old.subdomain}-del-${Date.now().toString(36)}`.slice(0, 63);
+    await old.update({ subdomain: freed }, { paranoid: false, hooks: false });
+  }
+
   // Monta os dados do tenant conforme o modo.
   const tenantData = { name: tenantInput.name, subdomain, active: true };
   if (mode === 'completo') {

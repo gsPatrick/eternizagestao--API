@@ -19,6 +19,9 @@ function toPublicTenant(tenant) {
     primaryColor: tenant.primaryColor,
     secondaryColor: tenant.secondaryColor,
     logoUrl: signLogo(tenant.logoUrl),
+    // Arte da página pública da cidade (quando vazia, o front usa a padrão).
+    heroImageUrl: signLogo(tenant.heroImageUrl),
+    footerImageUrl: signLogo(tenant.footerImageUrl),
   };
 }
 

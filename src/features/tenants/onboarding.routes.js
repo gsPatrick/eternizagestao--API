@@ -22,4 +22,7 @@ router.patch('/onboarding', authorize('admin'), controller.updateOnboarding);
 // Upload da logo do tenant (admin) — arquivo em base64, gravado no storage.
 router.post('/logo', authorize('admin'), controller.uploadLogo);
 
+// Imagens da PÁGINA PÚBLICA da cidade: :kind = hero | footer (admin).
+router.post('/public-image/:kind', authorize('admin'), controller.uploadPublicImage);
+
 module.exports = router;

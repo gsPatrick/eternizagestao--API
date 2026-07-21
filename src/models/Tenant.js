@@ -11,6 +11,11 @@ module.exports = (sequelize, DataTypes) => {
       cnpj: { type: DataTypes.STRING(18) },
       subdomain: { type: DataTypes.STRING(63), allowNull: false, unique: true },
       logoUrl: { type: DataTypes.STRING(500) },
+      // Imagens da PÁGINA PÚBLICA da cidade (hero e rodapé). Quando vazias, a
+      // landing usa a arte padrão da plataforma — assim cada cidade pode ter a
+      // sua foto, diferente do portal Eterniza.
+      heroImageUrl: { type: DataTypes.STRING(500) },
+      footerImageUrl: { type: DataTypes.STRING(500) },
       primaryColor: { type: DataTypes.STRING(7) },
       secondaryColor: { type: DataTypes.STRING(7) },
       email: { type: DataTypes.STRING(150), validate: { isEmail: true } },

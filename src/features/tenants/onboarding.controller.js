@@ -22,4 +22,11 @@ const uploadLogo = catchAsync(async (req, res) => {
   return ok(res, await service.uploadLogo(getTenantId(req), data));
 });
 
-module.exports = { getOnboarding, updateOnboarding, uploadLogo };
+// POST /v1/tenant/public-image/:kind — imagem da página pública (hero|footer)
+// do PRÓPRIO tenant. Permite cada cidade ter a sua arte, diferente da Eterniza.
+const uploadPublicImage = catchAsync(async (req, res) => {
+  const data = pick(req.body || {}, ['contentBase64', 'fileName', 'mimeType']);
+  return ok(res, await service.uploadPublicImage(getTenantId(req), req.params.kind, data));
+});
+
+module.exports = { getOnboarding, updateOnboarding, uploadLogo, uploadPublicImage };

@@ -14,6 +14,11 @@ const storage = require('../../providers/storage');
 const LOGO_MIME_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/svg+xml'];
 const LOGO_MAX_BYTES = 3 * 1024 * 1024; // 3 MB
 
+// Imagens da página pública (hero/rodapé): fotos grandes, sem SVG, teto maior.
+const PUBLIC_IMAGE_MIME_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+const PUBLIC_IMAGE_MAX_BYTES = 12 * 1024 * 1024; // 12 MB
+const PUBLIC_IMAGE_FIELDS = { hero: 'heroImageUrl', footer: 'footerImageUrl' };
+
 // TTL longo (7 dias) para a URL assinada da logo devolvida ao front: é branding
 // exibido via <img>; o painel recarrega antes de expirar. URLs externas (http da
 // cidade) passam intactas por signedUrl.
@@ -38,7 +43,8 @@ const TENANT_CONFIG_FIELDS = EDITABLE_FIELDS.filter((f) => f !== 'active');
 // Campos que o ADMIN da cidade preenche no onboarding delegado (marca + órgão
 // gestor + contato/endereço). NÃO inclui subdomínio (imutável) nem active.
 const ONBOARDING_FIELDS = [
-  'legalName', 'cnpj', 'logoUrl', 'primaryColor', 'secondaryColor',
+  'legalName', 'cnpj', 'logoUrl', 'heroImageUrl', 'footerImageUrl',
+  'primaryColor', 'secondaryColor',
   'email', 'phone', 'whatsapp', 'addressStreet', 'addressNumber', 'addressComplement',
   'addressDistrict', 'addressCity', 'addressState', 'addressZipcode',
   'documentHeader',
@@ -80,6 +86,9 @@ function serialize(tenant) {
     subdomain: t.subdomain,
     domain: computeDomain(t.subdomain),
     logoUrl: signLogo(t.logoUrl),
+    // imagens da página pública da cidade (assinadas p/ exibição no painel)
+    heroImageUrl: signLogo(t.heroImageUrl),
+    footerImageUrl: signLogo(t.footerImageUrl),
     primaryColor: t.primaryColor,
     secondaryColor: t.secondaryColor,
     email: t.email,
@@ -382,6 +391,40 @@ async function uploadLogo(tenantId, { contentBase64, fileName, mimeType } = {}) 
   await tenant.update({ logoUrl: saved.fileUrl });
   // Devolve ASSINADA (TTL longo) — o painel exibe a logo recém-enviada via <img>.
   return { logoUrl: signLogo(saved.fileUrl) };
+}
+
+/**
+ * Upload de uma IMAGEM DA PÁGINA PÚBLICA da cidade (hero ou rodapé).
+ * Cada cidade pode ter a própria arte; sem upload, a landing usa a da plataforma.
+ * @param {'hero'|'footer'} kind
+ */
+async function uploadPublicImage(tenantId, kind, { contentBase64, fileName, mimeType } = {}) {
+  const field = PUBLIC_IMAGE_FIELDS[kind];
+  if (!field) throw AppError.badRequest("Imagem inválida. Use 'hero' ou 'footer'.", 'INVALID_IMAGE_KIND');
+
+  const tenant = await getById(tenantId);
+  if (!contentBase64) {
+    throw AppError.badRequest('Envie o arquivo da imagem (contentBase64).', 'MISSING_FILE');
+  }
+  const mime = String(mimeType || '').toLowerCase();
+  if (!PUBLIC_IMAGE_MIME_TYPES.includes(mime)) {
+    throw AppError.badRequest('Formato inválido. Envie PNG, JPEG ou WEBP.', 'INVALID_IMAGE_TYPE');
+  }
+  const buffer = Buffer.from(contentBase64, 'base64');
+  if (!buffer.length) throw AppError.badRequest('Arquivo vazio ou inválido.', 'INVALID_FILE');
+  if (buffer.length > PUBLIC_IMAGE_MAX_BYTES) {
+    throw AppError.badRequest('Imagem muito grande. O limite é 12 MB.', 'FILE_TOO_LARGE');
+  }
+
+  const saved = await storage.saveFile({
+    tenantId,
+    fileName: fileName || `${kind}.jpg`,
+    content: buffer,
+    mimeType: mime,
+  });
+
+  await tenant.update({ [field]: saved.fileUrl });
+  return { [field]: signLogo(saved.fileUrl) };
 }
 
 // ---------------------------------------------------------------------------
@@ -729,6 +772,7 @@ module.exports = {
   getOnboarding,
   updateOnboarding,
   uploadLogo,
+  uploadPublicImage,
   getIntegrations,
   updateFinanceiro,
   testFinanceiro,

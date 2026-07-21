@@ -16,6 +16,8 @@ const EDITABLE_FIELDS = [
   'photoUrl', 'areaM2', 'notes',
   // Campos oficiais dos modelos de documento (certidão/autorização).
   'utilizacao', 'tombType', 'carneiraPermission',
+  // Referência de migração do SICART (quadra/lote anteriores).
+  'previousBlock', 'previousLot',
 ];
 
 const baseIncludes = [
@@ -46,7 +48,7 @@ async function buildListWhere(tenantId, query) {
   if (query.blocked !== undefined) where.isBlocked = query.blocked === 'true';
   if (query.onlyRoot === 'true' || query.onlyRoot === true) where.parentGraveId = null;
 
-  // busca livre: código OU nome do concessionário titular (concessão ativa)
+  // busca livre: código OU nome do concessionário titular OU nome do SEPULTADO
   const term = query.search || query.code;
   if (term) {
     const like = `%${term}%`;
@@ -59,6 +61,14 @@ async function buildListWhere(tenantId, query) {
       });
       const ownerGraveIds = ownerConcessions.map((c) => c.graveId).filter(Boolean);
       if (ownerGraveIds.length) clauses.push({ id: { [Op.in]: ownerGraveIds } });
+
+      // + sepultado(s) atualmente na sepultura (Deceased.currentGraveId).
+      const occupants = await Deceased.findAll({
+        where: { tenantId, fullName: { [Op.iLike]: like } },
+        attributes: ['currentGraveId'],
+      });
+      const occGraveIds = occupants.map((d) => d.currentGraveId).filter(Boolean);
+      if (occGraveIds.length) clauses.push({ id: { [Op.in]: occGraveIds } });
     }
     where[Op.or] = clauses;
   }

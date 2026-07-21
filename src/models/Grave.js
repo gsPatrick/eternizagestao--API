@@ -31,6 +31,10 @@ module.exports = (sequelize, DataTypes) => {
       tombType: { type: DataTypes.STRING(120) },
       // carneiraPermission: "Permissão de carneira" (texto livre: Sim/Não/descrição).
       carneiraPermission: { type: DataTypes.STRING(120) },
+      // Referência de MIGRAÇÃO do sistema antigo (SICART): quadra/lote como
+      // eram nomeados antes. Texto livre, só para consulta/rastreio.
+      previousBlock: { type: DataTypes.STRING(120) },
+      previousLot: { type: DataTypes.STRING(120) },
       // bloqueio operacional (ex.: inadimplência) — impede reformas/sepultamentos
       isBlocked: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },
       blockedReason: { type: DataTypes.STRING(255) },

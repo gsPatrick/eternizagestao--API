@@ -144,15 +144,34 @@ app.use(errorHandler);
 if (require.main === module) {
   const port = Number(process.env.APP_PORT) || 3000;
   const { sequelize } = require('./src/models');
+  const { runMigrations } = require('./src/utils/run-migrations');
 
-  const server = app.listen(port, async () => {
-    console.log(`Eterniza Gestão API ouvindo na porta ${port} (prefixo ${apiPrefix})`);
+  // AUTO-MIGRAÇÃO no boot: garante o schema do banco SEMPRE atualizado ao subir
+  // a API (o cliente configura só via Dockerfile). Roda ANTES de aceitar tráfego.
+  // Best-effort: se falhar (ex.: banco indisponível no 1º milissegundo), loga e
+  // segue — o schema pode já estar em dia. Desligue com AUTO_MIGRATE=false.
+  async function applyMigrations() {
+    if (process.env.AUTO_MIGRATE === 'false') return;
     try {
-      await sequelize.authenticate();
-      console.log('Conexão com o PostgreSQL estabelecida.');
+      console.log('[boot] aplicando migrations pendentes...');
+      await runMigrations();
+      console.log('[boot] banco em dia (migrations aplicadas).');
     } catch (err) {
-      console.error('Falha ao conectar no PostgreSQL:', err.message);
+      console.error('[boot] falha ao aplicar migrations:', err.message);
     }
+  }
+
+  let server;
+  applyMigrations().finally(() => {
+    server = app.listen(port, async () => {
+      console.log(`Eterniza Gestão API ouvindo na porta ${port} (prefixo ${apiPrefix})`);
+      try {
+        await sequelize.authenticate();
+        console.log('Conexão com o PostgreSQL estabelecida.');
+      } catch (err) {
+        console.error('Falha ao conectar no PostgreSQL:', err.message);
+      }
+    });
   });
 
   // Graceful shutdown: para de aceitar novas conexões, drena as em andamento,
@@ -169,7 +188,7 @@ if (require.main === module) {
     }, 10_000);
     forceTimer.unref();
 
-    server.close(async () => {
+    const done = async () => {
       try {
         await sequelize.close();
         console.log('Pool do PostgreSQL encerrado. Encerrando processo.');
@@ -179,7 +198,10 @@ if (require.main === module) {
         clearTimeout(forceTimer);
         process.exit(0);
       }
-    });
+    };
+    // `server` pode ainda não existir se o sinal chegar durante a migração inicial.
+    if (server) server.close(done);
+    else done();
   };
 
   process.on('SIGTERM', () => shutdown('SIGTERM'));

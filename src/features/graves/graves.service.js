@@ -15,7 +15,7 @@ const EDITABLE_FIELDS = [
   'code', 'unitType', 'capacity', 'geoPolygon', 'latitude', 'longitude',
   'photoUrl', 'areaM2', 'notes',
   // Campos oficiais dos modelos de documento (certidão/autorização).
-  'utilizacao', 'tombType', 'carneiraPermission',
+  'utilizacao', 'tombType', 'carneiraPermission', 'carneiraPermissionDate',
   // Referência de migração do SICART (quadra/lote anteriores).
   'previousBlock', 'previousLot',
 ];

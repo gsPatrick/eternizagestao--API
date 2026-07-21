@@ -9,8 +9,12 @@ module.exports = (sequelize, DataTypes) => {
       id: { type: DataTypes.UUID, defaultValue: DataTypes.UUIDV4, primaryKey: true },
       tenantId: { type: DataTypes.UUID, allowNull: false },
       fullName: { type: DataTypes.STRING(150), allowNull: false },
+      // Matrícula/registro interno do sepultado (campo do sistema antigo).
+      registrationNumber: { type: DataTypes.STRING(60) },
       cpf: { type: DataTypes.STRING(14) },
       rg: { type: DataTypes.STRING(20) },
+      // Idade no falecimento (texto: aceita "75" ou "75 anos 3 meses").
+      age: { type: DataTypes.STRING(30) },
       birthDate: { type: DataTypes.DATEONLY },
       deathDate: { type: DataTypes.DATEONLY },
       deathTime: { type: DataTypes.TIME },

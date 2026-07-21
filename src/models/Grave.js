@@ -31,6 +31,8 @@ module.exports = (sequelize, DataTypes) => {
       tombType: { type: DataTypes.STRING(120) },
       // carneiraPermission: "Permissão de carneira" (texto livre: Sim/Não/descrição).
       carneiraPermission: { type: DataTypes.STRING(120) },
+      // Data da permissão de carneira (campo do sistema antigo).
+      carneiraPermissionDate: { type: DataTypes.DATEONLY },
       // Referência de MIGRAÇÃO do sistema antigo (SICART): quadra/lote como
       // eram nomeados antes. Texto livre, só para consulta/rastreio.
       previousBlock: { type: DataTypes.STRING(120) },

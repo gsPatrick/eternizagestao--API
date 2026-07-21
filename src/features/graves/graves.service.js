@@ -522,4 +522,6 @@ async function remove(tenantId, id) {
 
 module.exports = {
   list, statusCounts, getById, summary, create, update, changeStatus, setBlocked, remove, EDITABLE_FIELDS,
+  // reaproveitados pelo backfill de certidões (mesma regra da emissão automática)
+  ensurePerpetuityCertificate, isPerpetualUse,
 };

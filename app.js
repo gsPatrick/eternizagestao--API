@@ -161,6 +161,29 @@ if (require.main === module) {
     }
   }
 
+  // BACKFILL das Certidões de Perpetuidade: emite as que faltam nas sepulturas
+  // JÁ marcadas como "Perpétuo" (a emissão automática passou a existir depois, e
+  // o bug do acento impedia até as novas). Idempotente e limitado por execução —
+  // roda DEPOIS que a API já está atendendo, para não atrasar o start.
+  // Desligue com PERPETUITY_BACKFILL=false.
+  async function runPerpetuityBackfill() {
+    if (process.env.PERPETUITY_BACKFILL === 'false') return;
+    try {
+      const { backfillPerpetuityCertificates } = require('./src/features/documents/backfill-perpetuity');
+      const r = await backfillPerpetuityCertificates();
+      if (r.pendentes) {
+        console.log(
+          `[boot] certidões de perpetuidade: ${r.emitidas} emitida(s), `
+          + `${r.falhas} falha(s), ${Math.max(r.pendentes - r.emitidas - r.falhas, 0)} restante(s).`
+        );
+      } else {
+        console.log('[boot] certidões de perpetuidade: nada pendente.');
+      }
+    } catch (err) {
+      console.error('[boot] backfill de certidões falhou:', err.message);
+    }
+  }
+
   let server;
   applyMigrations().finally(() => {
     server = app.listen(port, async () => {
@@ -171,6 +194,8 @@ if (require.main === module) {
       } catch (err) {
         console.error('Falha ao conectar no PostgreSQL:', err.message);
       }
+      // fora do caminho crítico: a API já está no ar quando isto começa
+      runPerpetuityBackfill();
     });
   });
 

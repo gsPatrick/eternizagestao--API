@@ -114,6 +114,18 @@ async function update(tenantId, id, data) {
 async function remove(tenantId, id) {
   const cemetery = await Cemetery.findOne({ where: { id, tenantId } });
   if (!cemetery) throw AppError.notFound('Cemitério não encontrado.');
+
+  // Guarda-corpo: excluir um cemitério com sepulturas deixaria os registros
+  // órfãos (sepultados, concessões e mapa apontariam para um cemitério que não
+  // aparece mais). Mesmo critério já aplicado em sepultura/sepultado.
+  const graves = await Grave.count({ where: { tenantId, cemeteryId: id } });
+  if (graves > 0) {
+    throw AppError.conflict(
+      `Cemitério possui ${graves} sepultura(s) cadastrada(s) — não pode ser excluído.`,
+      'CEMETERY_HAS_GRAVES'
+    );
+  }
+
   await cemetery.destroy();
 }
 

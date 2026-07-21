@@ -26,9 +26,12 @@ const write = authorize('admin', 'operador');
 // os 4 cantos) a imagem nunca aparece no mapa, então travar isso no super_admin
 // deixava a cidade com a ortofoto invisível e sem saída.
 const orthoWrite = authorize('admin');
-// EXCLUIR continua exclusivo da plataforma (super_admin): protege contra apagar
-// por imperícia/má-fé, que era a preocupação original.
-const orthoDelete = authorize('super_admin');
+// EXCLUIR: também do ADMIN da cidade. Travar no super_admin protegia contra
+// apagar por imperícia, mas na prática deixava a cidade sem saída — um envio
+// errado, ou uma ortofoto cujo arquivo se perdeu, ficava para sempre na lista e
+// só a plataforma podia limpar. A ortofoto é dado da própria cidade, quem
+// enviou é quem sabe se presta, e toda exclusão fica registrada na auditoria.
+const orthoDelete = authorize('admin');
 
 // contexto do mapa: centro do cemitério + ortofoto ativa + bounds
 router.get('/map/context', controller.getMapContext);

@@ -6,6 +6,7 @@ const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const graveEvents = require('../grave-timeline/grave-event.recorder');
 const graveStatuses = require('../grave-statuses/grave-statuses.service');
 const delinquency = require('../delinquency/delinquency.service');
+const audit = require('../audit-logs/audit.service');
 const storage = require('../../providers/storage');
 const { assertGraveAcceptsBurial } = require('./burials.helper');
 const {
@@ -151,7 +152,16 @@ async function create(tenantId, data, userId, { force, role, autoAuthorize = tru
       );
       await burial.update({ authorizationNumber: doc.formattedNumber });
     } catch (err) {
-      console.error('[burials] auto-emissão da autorização falhou:', err.message);
+      // VISIBILIDADE: além do log do servidor (nem sempre acessível), registra a
+      // falha na AUDITORIA para o administrador enxergar o motivo pelo painel.
+      console.error('[burials] auto-emissão da autorização falhou:', err.message, err.stack);
+      audit.record({
+        action: 'emissao_documento',
+        entityType: 'Documento',
+        entityId: burial.id,
+        description: `FALHA ao emitir a Autorização de Sepultamento: ${err.message}`,
+        newData: { erro: err.message, sepultamentoId: burial.id },
+      });
     }
   }
 

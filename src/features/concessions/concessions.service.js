@@ -5,6 +5,7 @@ const AppError = require('../../utils/app-error');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const graveEvents = require('../grave-timeline/grave-event.recorder');
 const graveStatuses = require('../grave-statuses/grave-statuses.service');
+const audit = require('../audit-logs/audit.service');
 const {
   sequelize, Concession, ConcessionTransfer, Grave, GraveStatus, Lot, Street, Block,
   Person, MaintenanceFee, FeeType,
@@ -96,7 +97,16 @@ async function issue(tenantId, graveId, data, userId) {
         userId
       );
     } catch (err) {
-      console.error('[concessions] auto-emissão da certidão de perpetuidade falhou:', err.message);
+      // VISIBILIDADE: além do log do servidor (nem sempre acessível), registra a
+      // falha na AUDITORIA para o administrador enxergar o motivo pelo painel.
+      console.error('[concessions] auto-emissão da certidão de perpetuidade falhou:', err.message, err.stack);
+      audit.record({
+        action: 'emissao_documento',
+        entityType: 'Documento',
+        entityId: concession.id,
+        description: `FALHA ao emitir a Certidão de Perpetuidade: ${err.message}`,
+        newData: { erro: err.message, concessaoId: concession.id },
+      });
     }
   }
 

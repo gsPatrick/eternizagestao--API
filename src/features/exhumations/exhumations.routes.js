@@ -13,6 +13,7 @@ const write = authorize('admin', 'operador');
 
 // montado direto em /v1 — paths completos
 router.post('/exhumations', write, controller.create);
+router.post('/exhumations/performed', write, controller.registerPerformed);
 router.get('/exhumations', controller.list);
 router.get('/exhumations/stats', controller.stats);
 router.get('/exhumations/:id', controller.getById);

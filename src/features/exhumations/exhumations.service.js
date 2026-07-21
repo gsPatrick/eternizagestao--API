@@ -322,4 +322,38 @@ async function getById(tenantId, id) {
   });
 }
 
-module.exports = { create, authorize, schedule, perform, cancel, list, stats, getById, CREATE_FIELDS };
+/**
+ * Registra uma exumação JÁ REALIZADA em um passo só.
+ *
+ * Existe porque o formulário de sepultado do cliente tem o bloco "Exumação"
+ * inline ("Foi exumado? / Local do envio / Número / Data de envio"): quando o
+ * operador marca que sim, o fato já aconteceu — não há solicitação, autorização
+ * e agendamento a percorrer. Aqui o fluxo oficial é percorrido internamente
+ * (create → authorize → perform), então o registro final é idêntico ao da tela
+ * de Exumações: mesmo número de processo, mesma baixa do sepultamento, mesmo
+ * depósito no ossário e mesma nova localização do sepultado.
+ */
+async function registerPerformed(tenantId, data, userId) {
+  const exhumation = await create(tenantId, {
+    graveId: data.graveId,
+    deceasedId: data.deceasedId,
+    requestDate: data.performedAt || undefined,
+    reason: data.reason || 'Exumação registrada no cadastro do sepultado.',
+  }, userId);
+
+  await authorize(tenantId, exhumation.id, { authorizationNumber: data.authorizationNumber }, userId);
+
+  return perform(tenantId, exhumation.id, {
+    performedAt: data.performedAt || undefined,
+    performedBy: data.performedBy || undefined,
+    destinationType: data.destinationType,
+    destinationGraveId: data.destinationGraveId || undefined,
+    destinationOssuaryNicheId: data.destinationOssuaryNicheId || undefined,
+    destinationDetails: data.destinationDetails || undefined,
+  }, userId);
+}
+
+module.exports = {
+  create, authorize, schedule, perform, cancel, list, stats, getById,
+  registerPerformed, CREATE_FIELDS,
+};

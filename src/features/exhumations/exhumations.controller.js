@@ -34,6 +34,19 @@ const perform = catchAsync(async (req, res) => {
   return ok(res, await service.perform(getTenantId(req), req.params.id, data, getUserId(req)));
 });
 
+// POST /v1/exhumations/performed — exumação JÁ REALIZADA em uma chamada
+// (bloco "Exumação" do cadastro de sepultado).
+const registerPerformed = catchAsync(async (req, res) => {
+  requireFields(req.body, ['graveId', 'deceasedId', 'destinationType']);
+  requireOneOf(req.body.destinationType, DESTINATION_TYPES, 'destinationType');
+  const data = pick(req.body, [
+    'graveId', 'deceasedId', 'reason', 'authorizationNumber',
+    'performedAt', 'performedBy', 'destinationType', 'destinationGraveId',
+    'destinationOssuaryNicheId', 'destinationDetails',
+  ]);
+  return created(res, await service.registerPerformed(getTenantId(req), data, getUserId(req)));
+});
+
 const cancel = catchAsync(async (req, res) => {
   return ok(res, await service.cancel(getTenantId(req), req.params.id, pick(req.body, ['reason'])));
 });
@@ -51,4 +64,4 @@ const getById = catchAsync(async (req, res) => {
   return ok(res, await service.getById(getTenantId(req), req.params.id));
 });
 
-module.exports = { create, authorize, schedule, perform, cancel, list, stats, getById };
+module.exports = { create, registerPerformed, authorize, schedule, perform, cancel, list, stats, getById };

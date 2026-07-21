@@ -5,7 +5,7 @@ const AppError = require('../../utils/app-error');
 const storage = require('../../providers/storage');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const {
-  sequelize, Deceased, Burial, Grave, GraveStatus, Lot, Street, Block,
+  sequelize, Deceased, Burial, Grave, GraveStatus, Lot, Street, Block, Cemetery,
   Exhumation, RemainsDeposit, OssuaryNiche, Ossuary, Concession, Person,
 } = require('../../models');
 
@@ -28,6 +28,8 @@ const currentGraveInclude = {
   include: [
     { model: GraveStatus, as: 'status' },
     { model: Grave, as: 'parentGrave' },
+    // Cemitério: coluna da listagem do cliente (Cemitério · Quadra · Lote · ...).
+    { model: Cemetery, as: 'cemetery', attributes: ['id', 'name'] },
     {
       model: Lot, as: 'lot',
       include: [{ model: Street, as: 'street', include: [{ model: Block, as: 'block' }] }],
@@ -39,7 +41,7 @@ const EDITABLE_FIELDS = [
   'fullName', 'registrationNumber', 'cpf', 'rg', 'age', 'birthDate', 'deathDate', 'deathTime', 'gender',
   'maritalStatus', 'skinColor', 'voterId', 'deathPlace',
   'motherName', 'fatherName', 'birthplace', 'causeOfDeath', 'attendingPhysician',
-  'deathCertificateNumber', 'deathCertificateRegistry', 'funeralHome', 'photoUrl', 'notes',
+  'deathCertificateNumber', 'deathCertificateRegistry', 'registryNumber', 'funeralHome', 'photoUrl', 'notes',
   'responsiblePersonId',
 ];
 
@@ -55,6 +57,8 @@ function buildListWhere(query) {
   if (query.fullName) where.fullName = { [Op.iLike]: `%${query.fullName}%` };
   if (query.cpf) where.cpf = { [Op.iLike]: `%${query.cpf}%` };
   if (query.motherName) where.motherName = { [Op.iLike]: `%${query.motherName}%` };
+  // MATRÍCULA: número interno do sepultado, filtro próprio na tela do cliente.
+  if (query.registrationNumber) where.registrationNumber = { [Op.iLike]: `%${query.registrationNumber}%` };
   if (query.deathFrom || query.deathTo) {
     where.deathDate = {};
     if (query.deathFrom) where.deathDate[Op.gte] = query.deathFrom;
@@ -138,25 +142,39 @@ async function list(tenantId, query) {
   // Filtros pelo JAZIGO ATUAL (quadra/rua/lote/código) — belongsTo, não multiplica
   // linhas. `graveCode` cobre "gaveta"/"matrícula" (código da unidade, ex.: M2/12B).
   const graveInc = { ...currentGraveInclude };
+  // `block`/`lot` em TEXTO espelham a busca da tela do cliente (são milhares de
+  // quadras — não cabem numa lista de ids).
   const hasGraveFilter =
-    query.blockId || query.streetId || query.lotId || query.cemeteryId || query.graveCode;
+    query.blockId || query.streetId || query.lotId || query.cemeteryId || query.graveCode
+    || query.block || query.lot;
   if (hasGraveFilter) {
     const graveWhere = {};
     if (query.cemeteryId) graveWhere.cemeteryId = query.cemeteryId;
     if (query.graveCode) graveWhere.code = { [Op.iLike]: `%${query.graveCode}%` };
     const lotWhere = {};
     if (query.lotId) lotWhere.id = query.lotId;
+    if (query.lot) lotWhere.code = { [Op.iLike]: `%${query.lot}%` };
     const streetInc = { model: Street, as: 'street', include: [{ model: Block, as: 'block' }] };
     if (query.streetId) { streetInc.where = { id: query.streetId }; streetInc.required = true; }
     if (query.blockId) {
       streetInc.required = true;
       streetInc.include = [{ model: Block, as: 'block', where: { id: query.blockId }, required: true }];
+    } else if (query.block) {
+      streetInc.required = true;
+      streetInc.include = [{
+        model: Block, as: 'block', required: true,
+        where: { code: { [Op.iLike]: `%${query.block}%` } },
+      }];
     }
-    const lotRequired = Boolean(query.blockId || query.streetId || query.lotId);
+    const lotRequired = Boolean(query.blockId || query.streetId || query.lotId || query.block || query.lot);
     graveInc.required = true;
     graveInc.where = Object.keys(graveWhere).length ? graveWhere : undefined;
+    // Mantém parentGrave e cemitério: sem eles as colunas "Gaveta" e
+    // "Cemitério" ficavam vazias justamente quando havia filtro aplicado.
     graveInc.include = [
       { model: GraveStatus, as: 'status' },
+      { model: Grave, as: 'parentGrave' },
+      { model: Cemetery, as: 'cemetery', attributes: ['id', 'name'] },
       { model: Lot, as: 'lot', where: Object.keys(lotWhere).length ? lotWhere : undefined, required: lotRequired, include: [streetInc] },
     ];
   }

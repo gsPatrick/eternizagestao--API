@@ -35,6 +35,9 @@ module.exports = (sequelize, DataTypes) => {
       deathCertificateNumber: { type: DataTypes.STRING(60) },
       // Cartório de registro (nome) — escolhido de Básico › Cartórios.
       deathCertificateRegistry: { type: DataTypes.STRING(150) },
+      // Nº do REGISTRO no cartório (livro/folha/termo) — distinto do número do
+      // atestado de óbito, que é emitido pelo médico.
+      registryNumber: { type: DataTypes.STRING(120) },
       // Funerária responsável (nome) — escolhida de Básico › Funerárias.
       funeralHome: { type: DataTypes.STRING(150) },
       // PDF da declaração/certidão de óbito anexada no cadastro.

@@ -22,10 +22,13 @@ const orthoBinary = express.raw({
 });
 
 const write = authorize('admin', 'operador');
-// Edição da ORTOFOTO é exclusiva do super_admin (plataforma): a aplicação/
-// georreferenciamento é feita pela Eterniza, não pelo cliente da cidade — evita
-// que alguém apague/desalinhe por imperícia ou má-fé. Leitura fica liberada.
-const orthoWrite = authorize('super_admin');
+// ORTOFOTO — enviar e POSICIONAR é do ADMIN da cidade: sem posicionar (definir
+// os 4 cantos) a imagem nunca aparece no mapa, então travar isso no super_admin
+// deixava a cidade com a ortofoto invisível e sem saída.
+const orthoWrite = authorize('admin');
+// EXCLUIR continua exclusivo da plataforma (super_admin): protege contra apagar
+// por imperícia/má-fé, que era a preocupação original.
+const orthoDelete = authorize('super_admin');
 
 // contexto do mapa: centro do cemitério + ortofoto ativa + bounds
 router.get('/map/context', controller.getMapContext);
@@ -34,7 +37,7 @@ router.get('/map/context', controller.getMapContext);
 router.get('/orthophotos', controller.listOrthophotos);
 router.post('/orthophotos', orthoWrite, orthoBinary, controller.uploadOrthophoto);
 router.patch('/orthophotos/:id', orthoWrite, controller.updateOrthophoto);
-router.delete('/orthophotos/:id', orthoWrite, controller.removeOrthophoto);
+router.delete('/orthophotos/:id', orthoDelete, controller.removeOrthophoto);
 
 // ortofotos — estilo path-param (compatibilidade)
 router.get('/cemeteries/:cemeteryId/orthophotos', controller.listOrthophotos);

@@ -288,7 +288,19 @@ async function resolveLotFromText(tenantId, { cemeteryId, block, street, lot }, 
 
 async function create(tenantId, data, userId) {
   return sequelize.transaction(async (transaction) => {
-    // LOCAL: aceita `lotId` direto (compat) OU quadra/lote por TEXTO (cadastro rápido).
+    // Jazigo pai (gaveta) — validado antes: pode fornecer o LOTE por herança,
+    // então a gaveta é cadastrada só com o pai + o número (código), sem redigitar
+    // quadra/lote (fluxo "Gavetas › Novo" do sistema antigo).
+    let parent = null;
+    if (data.parentGraveId) {
+      parent = await Grave.findOne({ where: { id: data.parentGraveId, tenantId }, transaction });
+      if (!parent) throw AppError.notFound('Jazigo pai não encontrado.');
+      if (parent.unitType !== 'jazigo' && parent.unitType !== 'tumulo') {
+        throw AppError.badRequest('Gavetas só podem pertencer a jazigos ou túmulos.', 'INVALID_PARENT');
+      }
+    }
+
+    // LOCAL: `lotId` direto (compat) OU quadra/lote por TEXTO OU herda do pai.
     let lot;
     if (data.lotId) {
       lot = await Lot.findOne({ where: { id: data.lotId, tenantId }, transaction });
@@ -299,17 +311,11 @@ async function create(tenantId, data, userId) {
         { cemeteryId: data.cemeteryId, block: data.block, street: data.street, lot: data.lot },
         transaction
       );
+    } else if (parent) {
+      lot = await Lot.findOne({ where: { id: parent.lotId, tenantId }, transaction });
+      if (!lot) throw AppError.notFound('Lote do jazigo pai não encontrado.');
     } else {
       throw AppError.badRequest('Informe o cemitério, a quadra e o lote.', 'MISSING_LOCATION');
-    }
-
-    // gaveta precisa de um jazigo pai válido do mesmo tenant
-    if (data.parentGraveId) {
-      const parent = await Grave.findOne({ where: { id: data.parentGraveId, tenantId }, transaction });
-      if (!parent) throw AppError.notFound('Jazigo pai não encontrado.');
-      if (parent.unitType !== 'jazigo' && parent.unitType !== 'tumulo') {
-        throw AppError.badRequest('Gavetas só podem pertencer a jazigos ou túmulos.', 'INVALID_PARENT');
-      }
     }
 
     const status = data.statusId

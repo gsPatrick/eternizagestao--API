@@ -6,6 +6,7 @@ const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const graveEvents = require('../grave-timeline/grave-event.recorder');
 const graveStatuses = require('../grave-statuses/grave-statuses.service');
 const audit = require('../audit-logs/audit.service');
+const { todayISO } = require('../../utils/date-local');
 const {
   sequelize, Concession, ConcessionTransfer, Grave, GraveStatus, Lot, Street, Block,
   Person, MaintenanceFee, FeeType,
@@ -15,13 +16,13 @@ const CREATE_FIELDS = [
   'personId', 'responsiblePersonId', 'concessionType', 'contractNumber', 'startDate', 'endDate', 'value', 'notes',
 ];
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayISO();
 
 // Data-limite (hoje + N meses) em ISO date — janela de "a vencer".
 function inMonths(months) {
   const d = new Date();
   d.setMonth(d.getMonth() + months);
-  return d.toISOString().slice(0, 10);
+  return todayISO(d);
 }
 
 async function issue(tenantId, graveId, data, userId) {

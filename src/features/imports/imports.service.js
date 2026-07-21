@@ -18,6 +18,7 @@ const {
   Concession, Billing, Payment,
 } = require('../../models');
 const { enqueue, registerHandler } = require('../../queues');
+const { todayISO } = require('../../utils/date-local');
 
 const SUPPORTED_SCOPES = Object.keys(validators); // proprietarios, sepultados, sepulturas
 
@@ -195,7 +196,7 @@ async function importSepultado(tenantId, row, userId, transaction) {
         cemeteryId: grave.cemeteryId,
         graveId: grave.id,
         deceasedId: deceased.id,
-        burialDate: row.burialDate || row.deathDate || new Date().toISOString().slice(0, 10),
+        burialDate: row.burialDate || row.deathDate || todayISO(),
         status: 'ativo',
         registeredByUserId: userId,
         notes: 'Importação de legado',

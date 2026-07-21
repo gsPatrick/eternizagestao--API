@@ -9,6 +9,7 @@ const { resolveDriver } = require('../../providers/payment-gateway');
 const { getIntegrationConfig } = require('../tenants/integration-config');
 const { computeTotal, nextPeriod, toDateOnly } = require('./billings.helper');
 const { nextNumber, nextBlock, formatBilling } = require('../../utils/sequence');
+const { todayISO } = require('../../utils/date-local');
 const {
   sequelize, Billing, MaintenanceFee, FeeType, Grave, Person, Payment, PaymentGatewayEvent,
 } = require('../../models');
@@ -208,7 +209,7 @@ async function summary(tenantId, query = {}) {
 
   // Recebido no mês corrente + taxa de baixas automáticas (StatCards da tela).
   // Agregado read-only sobre payments — não toca em nenhuma lógica de baixa.
-  const monthStart = `${new Date().toISOString().slice(0, 7)}-01`;
+  const monthStart = `${todayISO().slice(0, 7)}-01`;
   const [monthAgg] = await Payment.findAll({
     where: { tenantId, paidAt: { [Op.gte]: new Date(`${monthStart}T00:00:00.000Z`) } },
     attributes: [

@@ -4,6 +4,7 @@ const { Op } = require('sequelize');
 const AppError = require('../../utils/app-error');
 const graveEvents = require('../grave-timeline/grave-event.recorder');
 const { findConflicts, isExclusionConstraintError } = require('./schedules.helper');
+const { TZ } = require('../../utils/date-local');
 const {
   sequelize, Schedule, Cemetery, Chapel, Grave, Deceased, Person,
 } = require('../../models');
@@ -194,7 +195,7 @@ async function create(tenantId, data, userId) {
 
   notifyResponsible(
     schedule,
-    `Agendamento de ${schedule.scheduleType} registrado para ${new Date(schedule.startsAt).toLocaleString('pt-BR')}.`
+    `Agendamento de ${schedule.scheduleType} registrado para ${new Date(schedule.startsAt).toLocaleString('pt-BR', { timeZone: TZ })}.`
   );
   return getById(tenantId, schedule.id);
 }
@@ -289,7 +290,7 @@ async function changeStatus(tenantId, id, status) {
   if (status === 'confirmado') {
     notifyResponsible(
       schedule,
-      `Agendamento de ${schedule.scheduleType} confirmado para ${new Date(schedule.startsAt).toLocaleString('pt-BR')}.`
+      `Agendamento de ${schedule.scheduleType} confirmado para ${new Date(schedule.startsAt).toLocaleString('pt-BR', { timeZone: TZ })}.`
     );
   }
   return getById(tenantId, schedule.id);

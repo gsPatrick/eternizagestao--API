@@ -4,6 +4,7 @@ const AppError = require('../../utils/app-error');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const graveEvents = require('../grave-timeline/grave-event.recorder');
 const delinquency = require('../delinquency/delinquency.service');
+const { todayISO } = require('../../utils/date-local');
 const {
   sequelize, GraveMaintenance, Grave, Person,
 } = require('../../models');
@@ -84,7 +85,7 @@ async function changeStatus(tenantId, id, status, userId) {
 
     const changes = { status };
     if (status === 'concluida' && !maintenance.endDate) {
-      changes.endDate = new Date().toISOString().slice(0, 10);
+      changes.endDate = todayISO();
     }
     await maintenance.update(changes, { transaction });
 

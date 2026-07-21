@@ -4,6 +4,7 @@ const { Op } = require('sequelize');
 const AppError = require('../../utils/app-error');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const graveEvents = require('../grave-timeline/grave-event.recorder');
+const { todayISO } = require('../../utils/date-local');
 const {
   sequelize, Billing, MaintenanceFee, Grave, Person, Notification,
 } = require('../../models');
@@ -12,7 +13,7 @@ const {
 function daysOverdue(dueDate) {
   if (!dueDate) return 0;
   const due = new Date(`${String(dueDate).slice(0, 10)}T00:00:00Z`);
-  const today = new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00Z`);
+  const today = new Date(`${todayISO()}T00:00:00Z`);
   return Math.max(0, Math.round((today - due) / 86400000));
 }
 

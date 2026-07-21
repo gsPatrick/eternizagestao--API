@@ -1,5 +1,6 @@
 'use strict';
 
+const { todayISO } = require('../../utils/date-local');
 /**
  * MODELOS OFICIAIS de documento — reproduzem os PDFs do cliente (certidão de
  * perpetuidade e autorização de sepultamento). Cada layout é montado a partir de
@@ -35,19 +36,27 @@ function escapeHtml(value) {
 }
 
 // '2026-07-19' | Date → 'dd/mm/aaaa' (sem quebrar em valor inválido).
+// ATENÇÃO: valor DATEONLY ('2026-07-19') é formatado por SPLIT de string, sem
+// passar por Date. Antes, ele era parseado no fuso do PROCESSO (UTC em produção)
+// e formatado em São Paulo — o documento oficial saía com o DIA ANTERIOR.
 function fmtDate(value) {
   if (!value) return '—';
   const s = String(value);
-  const iso = s.length <= 10 ? `${s}T00:00:00` : s;
-  const d = new Date(iso);
+  const dateOnly = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if (dateOnly) return `${dateOnly[3]}/${dateOnly[2]}/${dateOnly[1]}`;
+  const d = new Date(s);
   if (Number.isNaN(d.getTime())) return escapeHtml(s);
   return d.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 }
 
 // 'Itaberaba, 19 de julho de 2026' — rodapé por extenso.
+// Deriva as partes no fuso de operação: com getters locais num processo UTC, o
+// rodapé virava o DIA SEGUINTE depois das 21h.
 function cityDateExtenso(city, date = new Date()) {
   const d = date instanceof Date ? date : new Date(date);
-  const label = `${d.getDate()} de ${MONTHS[d.getMonth()]} de ${d.getFullYear()}`;
+  if (Number.isNaN(d.getTime())) return city ? `${city}.` : '';
+  const [y, m, day] = todayISO(d).split('-').map(Number);
+  const label = `${day} de ${MONTHS[m - 1]} de ${y}`;
   return city ? `${city}, ${label}.` : `${label}.`;
 }
 

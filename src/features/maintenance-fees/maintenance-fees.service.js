@@ -3,6 +3,7 @@
 const { Op } = require('sequelize');
 const AppError = require('../../utils/app-error');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
+const { todayISO } = require('../../utils/date-local');
 const {
   sequelize, MaintenanceFee, FeeType, Grave, Person, Concession,
 } = require('../../models');
@@ -28,7 +29,7 @@ function resolveNewAmount(current, { newAmount, percent } = {}) {
 // Empilha um item de histórico { date, from, to, reason } no topo do array.
 function pushAdjustment(fee, { from, to, reason }) {
   const entry = {
-    date: new Date().toISOString().slice(0, 10),
+    date: todayISO(),
     from: Number(parseFloat(from).toFixed(2)),
     to: Number(parseFloat(to).toFixed(2)),
     reason: reason || null,
@@ -117,7 +118,7 @@ async function update(tenantId, id, data) {
   const fee = await getById(tenantId, id, { includes: [] });
   const changes = { ...data };
   if (changes.amount !== undefined && Number(changes.amount) !== Number(fee.amount)) {
-    changes.lastAdjustedAt = new Date().toISOString().slice(0, 10); // reajuste registrado
+    changes.lastAdjustedAt = todayISO(); // reajuste registrado
   }
   await fee.update(changes);
   return getById(tenantId, id);
@@ -150,7 +151,7 @@ async function adjust(tenantId, id, { newAmount, percent, reason } = {}) {
   const from = fee.amount;
   await fee.update({
     amount: to,
-    lastAdjustedAt: new Date().toISOString().slice(0, 10),
+    lastAdjustedAt: todayISO(),
     adjustmentNotes: reason || fee.adjustmentNotes,
     adjustments: pushAdjustment(fee, { from, to, reason }),
   });
@@ -205,7 +206,7 @@ async function batchAdjust(tenantId, { feeTypeId, percent, newAmount, reason, dr
       const from = fee.amount;
       await fee.update({
         amount: to,
-        lastAdjustedAt: new Date().toISOString().slice(0, 10),
+        lastAdjustedAt: todayISO(),
         adjustmentNotes: reason || fee.adjustmentNotes,
         adjustments: pushAdjustment(fee, { from, to, reason }),
       }, { transaction });

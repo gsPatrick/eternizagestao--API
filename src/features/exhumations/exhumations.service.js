@@ -7,6 +7,7 @@ const graveEvents = require('../grave-timeline/grave-event.recorder');
 const graveStatuses = require('../grave-statuses/grave-statuses.service');
 const { assertGraveAcceptsBurial } = require('../burials/burials.helper');
 const { nextNumber, formatExhumation } = require('../../utils/sequence');
+const { todayISO } = require('../../utils/date-local');
 const {
   sequelize, Exhumation, Burial, Grave, GraveStatus, Deceased, Person,
   OssuaryNiche, RemainsDeposit,
@@ -23,7 +24,7 @@ const LOCATION_BY_DESTINATION = {
   outro: 'desconhecido',
 };
 
-const today = () => new Date().toISOString().slice(0, 10);
+const today = () => todayISO();
 
 function assertStatus(exhumation, allowed) {
   if (!allowed.includes(exhumation.status)) {

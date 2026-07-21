@@ -105,8 +105,19 @@ async function setActive(tenantId, id, active) {
   return user.update({ active: Boolean(active) });
 }
 
+// O índice UNIQUE de `email` também enxerga linhas SOFT-DELETED: sem liberar,
+// remover um usuário impedia PARA SEMPRE reconvidar o mesmo e-mail. Usamos
+// sub-endereçamento (+del-<ts>), que continua um e-mail VÁLIDO para o model.
+function freedEmail(email) {
+  const stamp = Date.now().toString(36);
+  const [local, domain] = String(email).split('@');
+  return domain ? `${local}+del-${stamp}@${domain}` : `${email}.del-${stamp}`;
+}
+
 async function remove(tenantId, id) {
   const user = await getById(tenantId, id);
+  // LIBERA o e-mail antes do soft delete (permite reconvidar a mesma pessoa).
+  await user.update({ email: freedEmail(user.email) });
   await user.destroy(); // soft delete
 }
 
@@ -123,8 +134,13 @@ async function invite(tenantId, data, actor = {}) {
   }
   const email = String(data.email).toLowerCase().trim();
   const existing = await User.findOne({ where: { email, tenantId }, paranoid: false });
-  if (existing) {
+  if (existing && !existing.deletedAt) {
     throw AppError.conflict('Já existe um usuário com este e-mail.', 'EMAIL_IN_USE');
+  }
+  // Sobra de um usuário REMOVIDO (antes do release que libera o e-mail) ainda
+  // segurava o endereço no índice unique — libera e segue com o convite.
+  if (existing && existing.deletedAt) {
+    await existing.update({ email: freedEmail(existing.email) }, { paranoid: false, hooks: false });
   }
   const tempPassword = generateTempPassword();
   const passwordHash = await hashPassword(tempPassword);

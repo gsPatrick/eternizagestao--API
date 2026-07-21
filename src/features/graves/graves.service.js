@@ -287,7 +287,7 @@ async function resolveLotFromText(tenantId, { cemeteryId, block, street, lot }, 
 }
 
 async function create(tenantId, data, userId) {
-  return sequelize.transaction(async (transaction) => {
+  const grave = await sequelize.transaction(async (transaction) => {
     // Jazigo pai (gaveta) — validado antes: pode fornecer o LOTE por herança,
     // então a gaveta é cadastrada só com o pai + o número (código), sem redigitar
     // quadra/lote (fluxo "Gavetas › Novo" do sistema antigo).
@@ -341,28 +341,6 @@ async function create(tenantId, data, userId) {
       { transaction }
     );
 
-    // PROPRIETÁRIO opcional → cria a concessão (posse inline; o menu Concessões
-    // saiu). Perpétua quando a utilização indicar perpetuidade; senão temporária.
-    if (data.ownerPersonId) {
-      const person = await Person.findOne({ where: { id: data.ownerPersonId, tenantId }, transaction });
-      if (!person) throw AppError.notFound('Proprietário não encontrado.');
-      const isPerpetua = /perpet/i.test(String(data.utilizacao || ''));
-      await Concession.create(
-        {
-          tenantId,
-          graveId: grave.id,
-          personId: person.id,
-          responsiblePersonId: data.responsiblePersonId || null,
-          concessionType: isPerpetua ? 'perpetua' : 'temporaria',
-          startDate: new Date(),
-          endDate: null,
-          status: 'ativa',
-          acquisitionMethod: 'emissao',
-        },
-        { transaction }
-      );
-    }
-
     await graveEvents.record(
       {
         tenantId, graveId: grave.id, eventType: 'outro',
@@ -374,6 +352,32 @@ async function create(tenantId, data, userId) {
     );
     return grave;
   });
+
+  // PROPRIETÁRIO opcional → EMITE a concessão pelo fluxo oficial (fora da
+  // transação da sepultura). Assim a concessão perpétua também gera a CERTIDÃO
+  // DE PERPETUIDADE (concessions.issue cuida do documento). Perpétua quando a
+  // utilização indicar perpetuidade; senão temporária. Best-effort: a sepultura
+  // já criada não é desfeita se a emissão falhar.
+  if (data.ownerPersonId) {
+    try {
+      const concessions = require('../concessions/concessions.service');
+      const isPerpetua = /perpet/i.test(String(data.utilizacao || ''));
+      await concessions.issue(
+        tenantId,
+        grave.id,
+        {
+          personId: data.ownerPersonId,
+          responsiblePersonId: data.responsiblePersonId || null,
+          concessionType: isPerpetua ? 'perpetua' : 'temporaria',
+        },
+        userId
+      );
+    } catch (err) {
+      console.error('[graves] emissão da concessão do proprietário falhou:', err.message);
+    }
+  }
+
+  return grave;
 }
 
 async function update(tenantId, id, data) {

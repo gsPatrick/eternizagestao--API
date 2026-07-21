@@ -121,15 +121,17 @@ async function list(tenantId, query) {
     order: [['code', 'ASC']],
     include: [
       { model: GraveStatus, as: 'status' },
+      { model: Cemetery, as: 'cemetery', attributes: ['id', 'name'] },
       lotInclude(query),
     ],
   });
 
   // Enriquecimento por página (evita multiplicação de linhas de hasMany na paginação):
-  // ocupação (sepultamentos ativos) e concessionário titular de cada jazigo.
+  // ocupação (sepultamentos ativos), sepultado(s) atuais e concessionário titular.
   const ids = rows.map((g) => g.id);
   const occupancyByGrave = {};
   const ownerByGrave = {};
+  const occupantsByGrave = {};
   if (ids.length) {
     const counts = await Burial.findAll({
       where: { tenantId, graveId: { [Op.in]: ids }, status: 'ativo' },
@@ -138,6 +140,17 @@ async function list(tenantId, query) {
       raw: true,
     });
     counts.forEach((c) => { occupancyByGrave[c.graveId] = Number(c.total); });
+
+    // Sepultado(s) atualmente na sepultura (Deceased.currentGraveId).
+    const occupants = await Deceased.findAll({
+      where: { tenantId, currentGraveId: { [Op.in]: ids } },
+      attributes: ['id', 'fullName', 'currentGraveId'],
+    });
+    occupants.forEach((d) => {
+      (occupantsByGrave[d.currentGraveId] = occupantsByGrave[d.currentGraveId] || []).push({
+        id: d.id, fullName: d.fullName,
+      });
+    });
 
     const concessions = await Concession.findAll({
       where: { tenantId, graveId: { [Op.in]: ids }, status: 'ativa' },
@@ -153,6 +166,7 @@ async function list(tenantId, query) {
     json.available = Math.max(0, (g.capacity || 0) - active);
     json.occupancy = `${active}/${g.capacity || 0}`;
     json.isMapped = Boolean(g.geoPolygon);
+    json.occupants = occupantsByGrave[g.id] || [];
     const owner = ownerByGrave[g.id];
     json.owner = owner ? { concessionId: owner.id, person: owner.person } : null;
     return json;

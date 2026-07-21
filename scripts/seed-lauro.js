@@ -96,7 +96,7 @@ const BRAND = {
   deep: '#0a4a4a',
   city: 'Lauro de Freitas',
   state: 'BA',
-  fqdn: 'lauro-de-freitas.eterniza.com.br',
+  fqdn: 'lauro-de-freitas.eternizagestao.com.br',
 };
 
 // bairros reais de Lauro de Freitas (endereços das pessoas)

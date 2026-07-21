@@ -21,13 +21,13 @@
  *
  * CONTAS ADMINISTRATIVAS (senha: senha12345) — ver bloco final de credenciais.
  *   super@eterniza.dev (super_admin, sem tenant)
- *   admin@guarulhos.eterniza.com.br (admin, guarulhos)
- *   operador@guarulhos.eterniza.com.br (operador, guarulhos)
- *   consulta@guarulhos.eterniza.com.br (consulta, guarulhos)
+ *   admin@guarulhos.eternizagestao.com.br (admin, guarulhos)
+ *   operador@guarulhos.eternizagestao.com.br (operador, guarulhos)
+ *   consulta@guarulhos.eternizagestao.com.br (consulta, guarulhos)
  *   (mantém também admin@demo.dev / operador@demo.dev do seed antigo)
  *
  * PORTAL DA FAMÍLIA (FamilyPortalAccount, senha: senha12345):
- *   familia@guarulhos.eterniza.com.br → vinculado ao titular João Batista Silva,
+ *   familia@guarulhos.eternizagestao.com.br → vinculado ao titular João Batista Silva,
  *   que possui jazigo, concessão perpétua e cobranças (paga/pendente/atrasada).
  *
  * DOMÍNIO — guarulhos é o tenant "cheio": cemitérios, quadras/ruas/lotes,
@@ -166,31 +166,31 @@ const prevMonthRef = M === 0 ? `${Y - 1}-12` : `${Y}-${String(M).padStart(2, '0'
 const BRANDS = {
   guarulhos: {
     name: 'Prefeitura de Guarulhos', accent: '#1a5c3a', bright: '#288a58', deep: '#123f28',
-    city: 'Guarulhos', fqdn: 'guarulhos.eterniza.com.br',
+    city: 'Guarulhos', fqdn: 'guarulhos.eternizagestao.com.br',
   },
   'sao-paulo': {
     name: 'Prefeitura de São Paulo', accent: '#7a1b1b', bright: '#a83232', deep: '#571010',
-    city: 'São Paulo', fqdn: 'saopaulo.eterniza.com.br',
+    city: 'São Paulo', fqdn: 'saopaulo.eternizagestao.com.br',
   },
   osasco: {
     name: 'Prefeitura de Osasco', accent: '#5b3a8c', bright: '#7a52b8', deep: '#412963',
-    city: 'Osasco', fqdn: 'osasco.eterniza.com.br',
+    city: 'Osasco', fqdn: 'osasco.eternizagestao.com.br',
   },
   campinas: {
     name: 'Prefeitura de Campinas', accent: '#0f6b6b', bright: '#189494', deep: '#0a4a4a',
-    city: 'Campinas', fqdn: 'campinas.eterniza.com.br',
+    city: 'Campinas', fqdn: 'campinas.eternizagestao.com.br',
   },
   santos: {
     name: 'Prefeitura de Santos', accent: '#12507a', bright: '#1d70a8', deep: '#0c3854',
-    city: 'Santos', fqdn: 'santos.eterniza.com.br',
+    city: 'Santos', fqdn: 'santos.eternizagestao.com.br',
   },
   ribeirao: {
     name: 'Prefeitura de Ribeirão Preto', accent: '#a8532b', bright: '#c96e42', deep: '#7c3c1f',
-    city: 'Ribeirão Preto', fqdn: 'ribeirao.eterniza.com.br',
+    city: 'Ribeirão Preto', fqdn: 'ribeirao.eternizagestao.com.br',
   },
   sorocaba: {
     name: 'Prefeitura de Sorocaba', accent: '#3a3f8c', bright: '#5257b8', deep: '#292d63',
-    city: 'Sorocaba', fqdn: 'sorocaba.eterniza.com.br',
+    city: 'Sorocaba', fqdn: 'sorocaba.eternizagestao.com.br',
   },
 };
 
@@ -898,7 +898,7 @@ async function main() {
   const demo = await foc(
     Tenant,
     { subdomain: 'demo' },
-    { name: 'Prefeitura Demo', legalName: 'Prefeitura Municipal Demo', email: 'contato@demo.gov.br', primaryColor: '#032e59', secondaryColor: '#0a4a8c', settings: { fqdn: 'demo.eterniza.com.br' } }
+    { name: 'Prefeitura Demo', legalName: 'Prefeitura Municipal Demo', email: 'contato@demo.gov.br', primaryColor: '#032e59', secondaryColor: '#0a4a8c', settings: { fqdn: 'demo.eternizagestao.com.br' } }
   );
   await upsertUser({ email: 'admin@demo.dev', name: 'Admin Demo', role: 'admin', tenantId: demo.id });
   await upsertUser({ email: 'operador@demo.dev', name: 'Operador Demo', role: 'operador', tenantId: demo.id });
@@ -953,9 +953,9 @@ async function main() {
   // --- guarulhos (PADRÃO / cheio) ---
   const guarulhos = await upsertTenant('guarulhos', { isDefault: true });
   const gUsers = {
-    admin: await upsertUser({ email: 'admin@guarulhos.eterniza.com.br', name: 'Administrador Guarulhos', role: 'admin', tenantId: guarulhos.id }),
-    operador: await upsertUser({ email: 'operador@guarulhos.eterniza.com.br', name: 'Operador Guarulhos', role: 'operador', tenantId: guarulhos.id }),
-    consulta: await upsertUser({ email: 'consulta@guarulhos.eterniza.com.br', name: 'Consulta Guarulhos', role: 'consulta', tenantId: guarulhos.id }),
+    admin: await upsertUser({ email: 'admin@guarulhos.eternizagestao.com.br', name: 'Administrador Guarulhos', role: 'admin', tenantId: guarulhos.id }),
+    operador: await upsertUser({ email: 'operador@guarulhos.eternizagestao.com.br', name: 'Operador Guarulhos', role: 'operador', tenantId: guarulhos.id }),
+    consulta: await upsertUser({ email: 'consulta@guarulhos.eternizagestao.com.br', name: 'Consulta Guarulhos', role: 'consulta', tenantId: guarulhos.id }),
   };
   const guarulhosStats = await seedGuarulhos(guarulhos, gUsers);
 
@@ -995,19 +995,19 @@ async function main() {
   console.log('   e-mail                                    | role        | tenant');
   console.log('   ------------------------------------------|-------------|-----------');
   console.log('   super@eterniza.dev                        | super_admin | (nenhum)');
-  console.log('   admin@guarulhos.eterniza.com.br           | admin       | guarulhos');
-  console.log('   operador@guarulhos.eterniza.com.br        | operador    | guarulhos');
-  console.log('   consulta@guarulhos.eterniza.com.br        | consulta    | guarulhos');
-  console.log('   admin@saopaulo.eterniza.com.br            | admin       | sao-paulo');
-  console.log('   admin@osasco.eterniza.com.br              | admin       | osasco');
-  console.log('   admin@campinas.eterniza.com.br            | admin       | campinas');
-  console.log('   admin@santos.eterniza.com.br              | admin       | santos');
-  console.log('   admin@ribeirao.eterniza.com.br            | admin       | ribeirao');
-  console.log('   admin@sorocaba.eterniza.com.br            | admin       | sorocaba');
+  console.log('   admin@guarulhos.eternizagestao.com.br           | admin       | guarulhos');
+  console.log('   operador@guarulhos.eternizagestao.com.br        | operador    | guarulhos');
+  console.log('   consulta@guarulhos.eternizagestao.com.br        | consulta    | guarulhos');
+  console.log('   admin@saopaulo.eternizagestao.com.br            | admin       | sao-paulo');
+  console.log('   admin@osasco.eternizagestao.com.br              | admin       | osasco');
+  console.log('   admin@campinas.eternizagestao.com.br            | admin       | campinas');
+  console.log('   admin@santos.eternizagestao.com.br              | admin       | santos');
+  console.log('   admin@ribeirao.eternizagestao.com.br            | admin       | ribeirao');
+  console.log('   admin@sorocaba.eternizagestao.com.br            | admin       | sorocaba');
   console.log('   admin@demo.dev                            | admin       | demo');
   console.log('   operador@demo.dev                         | operador    | demo');
   console.log('\n  PORTAL DA FAMÍLIA:');
-  console.log('   familia@guarulhos.eterniza.com.br         | titular João Batista Silva (guarulhos)');
+  console.log('   familia@guarulhos.eternizagestao.com.br         | titular João Batista Silva (guarulhos)');
   console.log(`\n${line}`);
   console.log('Envie o header X-Tenant-Subdomain com o slug curto (ex.: guarulhos) para');
   console.log('resolver o tenant nas rotas públicas / super_admin.');

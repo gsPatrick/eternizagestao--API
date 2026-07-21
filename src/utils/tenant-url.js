@@ -3,7 +3,7 @@
 /**
  * URLs POR CIDADE (multi-tenant) — deriva a base do link a partir do SUBDOMÍNIO
  * da cidade, para que e-mails de convite/ativação/redefinição levem ao domínio
- * BRANDED da cidade (ex.: https://guarulhos.eterniza.com.br) em vez de um
+ * BRANDED da cidade (ex.: https://guarulhos.eternizagestao.com.br) em vez de um
  * domínio genérico global.
  *
  * Base: `https://<subdomain>.<BASE_DOMAIN>` (BASE_DOMAIN de env, mesma paridade

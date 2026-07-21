@@ -25,7 +25,7 @@ const { subject, html, text } = renderEmail('fee-reminder', {
   jazigo: 'A-12',
   valor: 'R$ 150,00',
   vencimento: '21/07/2026',
-  cta_url: 'https://guarulhos.eterniza.com.br/2via/abc',
+  cta_url: 'https://guarulhos.eternizagestao.com.br/2via/abc',
 }, { tenant }); // tenant.primaryColor tinge o cabeçalho e os botões
 
 await mailProvider.send({ to, subject, html, text });

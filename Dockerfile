@@ -35,4 +35,13 @@ EXPOSE 3333
 # No EasyPanel: crie um 2º serviço com esta mesma imagem/repo e a env WORKER=true
 # (mesmas envs de DB/REDIS/RESEND da API). O worker não precisa expor porta.
 # (Postgres/Redis precisam estar acessíveis via as variáveis do ambiente no start.)
+#
+# FALHA RÁPIDA no start da API (os `&&` são intencionais — não troque por `;`):
+#   - `npm run migrate` falhando   → não sobe a API com schema fora de sincronia;
+#   - `seed-admin` falhando        → não sobe a API sem super_admin válido. Em
+#     produção esse seed EXIGE a env SEED_ADMIN_PASSWORD (senha forte, >=12
+#     caracteres); sem ela o container aborta de propósito, para nenhum ambiente
+#     nascer com a senha padrão pública do repositório.
+# Envs relevantes: SEED_ADMIN_EMAIL, SEED_ADMIN_PASSWORD (obrigatória em prod),
+# AUTO_MIGRATE=false (escape hatch), PERPETUITY_BACKFILL=true (opt-in pontual).
 CMD ["sh", "-c", "if [ \"$WORKER\" = \"true\" ]; then echo '[start] modo WORKER'; node src/queues/worker.js; else echo '[start] modo API'; npm run migrate && node scripts/seed-admin.js && node app.js; fi"]

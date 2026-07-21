@@ -6,10 +6,17 @@ const { ok, created } = require('../../utils/http-response');
 const { requireFields } = require('../../utils/validation');
 const { getTenantId } = require('../../utils/request-helpers');
 const service = require('./notifications.service');
+const automations = require('./automations.service');
 
 const list = catchAsync(async (req, res) => {
   const { rows, meta } = await service.list(getTenantId(req), req.query);
   return ok(res, rows, meta);
+});
+
+// Estado REAL das automações (jobs agendados, cron, agendador ligado/desligado).
+// Somente leitura: não existe endpoint para ligar/desligar nem editar template.
+const listAutomations = catchAsync(async (req, res) => {
+  return ok(res, await automations.getState());
 });
 
 const getById = catchAsync(async (req, res) => {
@@ -109,4 +116,4 @@ const test = catchAsync(async (req, res) => {
   return created(res, notification);
 });
 
-module.exports = { list, getById, create, bulk, retry, test };
+module.exports = { list, listAutomations, getById, create, bulk, retry, test };

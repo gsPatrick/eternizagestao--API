@@ -1,72 +1,69 @@
 # src/providers/email/
 
-Provider de e-mail no padrão **driver** (mock ↔ real por env), igual aos demais
-providers (`whatsapp/`, `payment-gateway/`). Entrega e-mails transacionais já
-renderizados — os corpos vêm prontos de `src/emails/render.js` (`renderEmail`
-devolve `{ subject, html, text }`).
+Provider de e-mail no padrão **driver**, igual aos demais providers (`whatsapp/`,
+`payment-gateway/`). Entrega e-mails transacionais já renderizados — os corpos
+vêm prontos de `src/emails/render.js` (`renderEmail` devolve `{ subject, html, text }`).
 
 Regra do projeto: `controller → service → provider`. O service de notificações
 consome este provider; nunca chame o provider direto do controller.
 
-## Interface (idêntica entre todos os drivers)
+## Interface
 
 ```js
 const email = require('./src/providers/email');
 
-email.name; // string do driver ativo: 'mock' | 'smtp' | ...
+email.resolveDriver(tenantSmtp).name; // 'smtp' | 'resend' | 'mock'
+email.isConfigured(tenantSmtp);       // há caminho REAL de envio?
 
-await email.sendEmail({ to, subject, html, text });
-// => { providerMessageId }
+await email.sendEmail(tenantSmtp, { to, subject, html, text });
+// => { providerMessageId }   |   lança AppError('EMAIL_NOT_CONFIGURED') se não configurado
 ```
 
-- `sendEmail({ to, subject, html, text }) => Promise<{ providerMessageId }>`
+- `sendEmail(tenantSmtp, { to, subject, html, text }) => Promise<{ providerMessageId }>`
   - **assíncrono**;
   - **lança em falha** — a fila de notificações depende disso para reter/retentar;
   - retorna o `providerMessageId` do provedor (para rastreio/idempotência).
-- `name` — string do driver ativo.
 
-## Seleção de driver
+`tenantSmtp` = `{ host, port, secure, user, password, fromName, fromEmail }`, vindo
+de `features/tenants/integration-config.js` (`getIntegrationConfig`).
 
-Por `EMAIL_PROVIDER`:
+## Seleção de driver (por CHAMADA, precedência)
 
-| valor | driver | envio real? | requisitos |
+| ordem | driver | quando | envio real? |
 |---|---|---|---|
-| `mock` (default fora de produção) | `drivers/mock.js` | não | nenhum — **nunca falha** |
-| `smtp` | `drivers/smtp.js` | sim | pacote `nodemailer` + `SMTP_HOST` |
+| 1 | `smtp` (`drivers/smtp.js`) | a CIDADE tem SMTP salvo (host preenchido) | sim |
+| 2 | `resend` (`drivers/resend.js`) | há `RESEND_API_KEY` na plataforma | sim |
+| 3 | `mock` (`drivers/mock.js`) | nenhum dos dois | **não — recusa** |
 
-- **Default `mock`** apenas fora de produção. Em produção (`NODE_ENV=production`)
-  `EMAIL_PROVIDER` é **obrigatório**: sem ele, falha no carregamento (padrão do
-  `src/utils/jwt.js`).
-- Driver desconhecido → erro no carregamento.
+Não existe `EMAIL_PROVIDER`: a escolha é derivada da config, não de env.
 
-### Driver `mock`
+### Driver `mock` — sentinela de "não configurado"
 
-Não envia nada. Loga `[email:mock] -> to (subject)` e devolve
-`{ providerMessageId: 'mock-<timestamp>-<uuid>' }`. Nunca falha. É o default em
-dev/teste.
+Não envia nada e **não é um caminho de envio**: quando `resolveDriver` cai nele,
+`sendEmail` lança `AppError(503, 'EMAIL_NOT_CONFIGURED')`. Antes ele devolvia um
+`providerMessageId` sintético e a notificação era gravada como `enviada` sem que
+ninguém recebesse nada — mentira que agora vira `falha` com a instrução de
+configuração no `errorMessage`.
 
-### Driver `smtp` (real, opcional)
+### Driver `smtp` (real)
 
-Usa [`nodemailer`](https://nodemailer.com), que é uma **dependência opcional** e
-**não está no `package.json`** (pertence a outro dono). Para habilitar:
+Usa [`nodemailer`](https://nodemailer.com), **dependência opcional** (carregada
+com `try-require` memoizado). Sem ela, o provider registra o aviso e segue a
+precedência (Resend → mock/recusa).
 
-```bash
-npm i nodemailer
-```
+### Driver `resend` (real, da plataforma)
 
-Se `EMAIL_PROVIDER=smtp` e `nodemailer` não estiver instalado, o driver **falha
-no carregamento** com mensagem clara. Também exige `SMTP_HOST` (e credenciais
-`SMTP_USER`/`SMTP_PASS` quando o servidor pedir). Remetente via `EMAIL_FROM`
-(cai em `SMTP_USER` se ausente).
+Remetente da PLATAFORMA (convites/onboarding do super_admin). Ativado por
+`RESEND_API_KEY`; remetente ajustável por `EMAIL_FROM` / `EMAIL_FROM_NAME`.
 
 ## Novos drivers (SendGrid, SES, ...)
 
-Crie `drivers/<nome>.js` exportando `{ name, async sendEmail(...) }` com a MESMA
-interface, adicione o nome à lista `KNOWN` no `index.js`, e — se usar SDK próprio —
-faça `try-require` e falhe no carregamento quando a dep/credencial faltar. Nenhuma
-feature muda: só o driver.
+Crie `drivers/<nome>.js` exportando `{ name, async sendEmail(config, message) }`
+com a MESMA interface e adicione um branch em `resolveDriver`. Nenhuma feature
+muda: só o driver.
 
 ## Variáveis de ambiente
 
-Ver `.env.example` (seção *E-mail*): `EMAIL_PROVIDER`, `EMAIL_FROM`, `SMTP_HOST`,
-`SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`.
+Ver `.env.example` (seção *E-mail*): `RESEND_API_KEY`, `EMAIL_FROM`,
+`EMAIL_FROM_NAME`. O SMTP **por cidade** não vem de env — é salvo no painel em
+Configurações › Integrações.

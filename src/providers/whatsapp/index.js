@@ -10,7 +10,14 @@
  *
  * Seleção do driver (no load):
  *   - EVOLUTION_API_URL presente → driver `evolution` (real).
- *   - ausente                    → driver `mock` (não quebra o dev; QR placeholder).
+ *   - ausente                    → driver `mock`.
+ *
+ * O QUE O MOCK FAZ (e o que NÃO faz mais):
+ *   - CONEXÃO (getQrCode/getStatus): continua respondendo com QR placeholder e
+ *     `mock:true` — a tela já rotula "modo demonstração", ninguém é enganado.
+ *   - ENVIO (sendText): LANÇA AppError('WHATSAPP_NOT_CONFIGURED'). Antes só
+ *     logava e devolvia id sintético, e a notificação era gravada como 'enviada'
+ *     sem nunca ter saído. Mensagem não entregue tem que virar 'falha'.
  *
  * Interface abstrata (todos recebem o `tenant` — model/objeto com subdomain/id):
  *   instanceNameFor(tenant)            => string  (ex.: 'cidade-saopaulo')

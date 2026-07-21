@@ -11,7 +11,8 @@ const { sequelize, Document, DocumentSignature, Person, Tenant } = require('../.
  * `Tenant.settings.integrations.signature` (`{ provider, apiKey, webhookToken }`)
  * — mesmo padrão de `integration-config.js` (que hoje cobre asaas/smtp/whatsapp;
  * NÃO editado aqui). Sem config → forma vazia (provider 'mock', apiKey null) →
- * o resolveDriver cai no driver mock e o dev nunca quebra.
+ * o resolveDriver cai no driver mock, que hoje RECUSA o envio (não há provedor
+ * de assinatura contratado — ver providers/digital-signature).
  *
  * TODO(produção — criptografia em repouso): `signature.apiKey`/`webhookToken`
  * ficam em CLARO no JSONB do tenant; cifrar/decifrar antes de produção, como já
@@ -107,7 +108,13 @@ async function createSignature(tenantId, documentId, data) {
     throw AppError.conflict('Documento cancelado não pode ser enviado para assinatura.', 'DOCUMENT_CANCELED');
   }
 
-  // Provedor/driver DA CIDADE (settings.integrations.signature). Sem apiKey → mock.
+  // Provedor/driver DA CIDADE (settings.integrations.signature).
+  // REGRA: sem provedor de assinatura contratado, o envio é RECUSADO e NADA é
+  // persistido. `createEnvelope` do driver mock lança
+  // SIGNATURE_PROVIDER_NOT_CONFIGURED e o erro sobe intacto para o cliente —
+  // antes gravávamos DocumentSignature 'enviado' + Document
+  // 'aguardando_assinatura' com um envelope inventado, e o documento ficava
+  // preso esperando uma assinatura que ninguém chegou a receber.
   const signatureConfig = await getSignatureConfig(tenantId);
   const driver = provider.resolveDriver(signatureConfig);
 
@@ -252,11 +259,21 @@ async function handleWebhookEvent(event) {
  * Em produção / provedor real, não é permitido.
  */
 async function simulateProviderReturn(tenantId, documentId) {
-  // Só permitido quando o driver DA CIDADE é o mock (provedor real → sem simulação).
+  // 1) Produção NUNCA simula assinatura. A guarda antiga (`driver.name !== 'mock'`)
+  //    era inócua — o registry só tem o driver 'mock', então ela nunca disparava
+  //    e um admin podia marcar como 'assinado' um documento com valor legal.
+  if (process.env.NODE_ENV === 'production') {
+    throw AppError.forbidden(
+      'Simulação de assinatura é indisponível em produção.',
+      'SIGNATURE_SIMULATION_UNAVAILABLE'
+    );
+  }
+
+  // 2) Provedor real configurado → a assinatura vem por webhook dele, não daqui.
   const driver = provider.resolveDriver(await getSignatureConfig(tenantId));
   if (driver.name !== 'mock') {
     throw AppError.badRequest(
-      'Simulação de assinatura disponível apenas com o provedor mock.',
+      'Simulação de assinatura disponível apenas quando não há provedor real configurado.',
       'SIGNATURE_SIMULATION_UNAVAILABLE'
     );
   }

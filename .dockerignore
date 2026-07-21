@@ -12,3 +12,19 @@ coverage
 .DS_Store
 Dockerfile
 .dockerignore
+
+# ---------------------------------------------------------------------------
+# SEEDS DE DEMONSTRAÇÃO / TESTE — NÃO ENTRAM NA IMAGEM DE PRODUÇÃO.
+# Eles criam tenants fictícios e usuários com senhas fracas versionadas
+# (seed-dev: 8 cidades falsas + senha12345; seed-lauro: teste@gmail.com/teste123).
+# Estando na imagem, qualquer um com shell no container consegue popular o banco
+# de produção com dados falsos e credenciais conhecidas. Fora da imagem, o pior
+# caso vira "arquivo não encontrado".
+#
+# ATENÇÃO: scripts/seed-admin.js PRECISA continuar na imagem — o Dockerfile o
+# executa no start (`node scripts/seed-admin.js`) para garantir o super_admin.
+# Por isso ignoramos os seeds um a um, e não a pasta scripts/ inteira.
+scripts/seed-dev.js
+scripts/seed-fantasma.js
+scripts/seed-lauro.js
+scripts/smoke-test.js

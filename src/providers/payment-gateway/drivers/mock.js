@@ -1,18 +1,39 @@
 'use strict';
 
 /**
- * Driver MOCK do gateway de pagamento — fallback de DESENVOLVIMENTO.
- * Usado quando a cidade NÃO tem Asaas configurado (sem apiKey) → o dev nunca
- * quebra: cobranças ganham boleto/PIX fictícios e a "baixa automática" pode ser
- * simulada pelo webhook mock (HMAC).
+ * Driver MOCK do gateway de pagamento — SENTINELA de "gateway não configurado".
+ * Usado quando a cidade NÃO tem Asaas configurado (sem apiKey).
+ *
+ * O QUE MUDOU (e por quê): este driver gerava código de barras aleatório e PIX
+ * inventado, e a Billing PERSISTIA isso. O cidadão recebia um boleto que nenhum
+ * banco aceita e o município achava que tinha cobrado. Agora `createCharge`
+ * RECUSA a emissão (AppError PAYMENT_GATEWAY_NOT_CONFIGURED); as leituras
+ * (getCharge/getPixQr) também não inventam dado.
+ *
+ * O que CONTINUA: os utilitários de webhook por HMAC usados pela rota
+ * `/v1/webhooks/payment-gateway` e pela simulação de baixa (restrita a
+ * NÃO-produção + gateway realmente mock — ver payments.service):
+ *   verifyWebhook(rawBody, signatureHeader) / parseWebhookEvent(rawBodyOrBody)
  *
  * Implementa a MESMA interface do driver real (asaas.js):
  *   createCharge(tenantAsaas, data) / getCharge / getPixQr / cancelCharge / testConnection
- * e MAIS os utilitários de webhook por HMAC usados pela rota
- * `/v1/webhooks/payment-gateway` e pela simulação da tela de Cobranças:
- *   verifyWebhook(rawBody, signatureHeader) / parseWebhookEvent(rawBodyOrBody)
  */
 const crypto = require('crypto');
+const AppError = require('../../../utils/app-error');
+
+// Mensagem única do estado "não configurado" — acionável, aponta a tela.
+const PAYMENT_GATEWAY_NOT_CONFIGURED_MESSAGE =
+  'Gateway de pagamento não configurado: cadastre a chave da conta Asaas desta cidade '
+  + 'em Configurações › Integrações antes de emitir cobranças. Nenhuma cobrança foi emitida.';
+
+function notConfigured() {
+  // 503: a operação é válida, falta a integração — não é erro de payload.
+  return new AppError(
+    PAYMENT_GATEWAY_NOT_CONFIGURED_MESSAGE,
+    503,
+    'PAYMENT_GATEWAY_NOT_CONFIGURED'
+  );
+}
 
 const IS_PROD = process.env.NODE_ENV === 'production';
 
@@ -72,42 +93,26 @@ function parseWebhookEvent(rawBodyOrBody) {
 
 // -----------------------------------------------------------------------------
 // Interface de charge (mesma assinatura do driver Asaas: 1º arg tenantAsaas).
+// TODAS as operações que produziriam DADO FINANCEIRO recusam: sem conta no
+// gateway não existe boleto nem PIX, e um valor inventado aqui é persistido na
+// Billing e entregue ao cidadão como se fosse pagável.
 // -----------------------------------------------------------------------------
-async function createCharge(tenantAsaas, data = {}) {
-  const { billingId, amount, dueDate } = data;
-  const chargeId = `mock_${crypto.randomUUID()}`;
-  const digits = crypto.randomBytes(24).toString('hex').replace(/\D/g, '').padEnd(47, '0');
-  return {
-    provider: 'mock',
-    chargeId,
-    boleto: {
-      barcode: digits.slice(0, 44),
-      digitableLine: digits.slice(0, 47),
-      url: `https://mock-gateway.local/boleto/${chargeId}`,
-    },
-    pix: {
-      qrCode: `data:image/png;base64,MOCKQR_${chargeId}`,
-      copyPaste: `00020126MOCKPIX${chargeId}5204000053039865802BR6304ABCD`,
-      expiresAt: dueDate ? new Date(`${dueDate}T23:59:59Z`).toISOString() : null,
-    },
-    raw: { billingId, amount, dueDate },
-  };
+async function createCharge() {
+  throw notConfigured();
 }
 
-async function getCharge(tenantAsaas, id) {
-  return { chargeId: id, status: 'PENDING', paid: false, raw: null };
+async function getCharge() {
+  throw notConfigured();
 }
 
-async function getPixQr(tenantAsaas, id) {
-  return {
-    qrCode: `data:image/png;base64,MOCKQR_${id}`,
-    copyPaste: `00020126MOCKPIX${id}5204000053039865802BR6304ABCD`,
-    expiresAt: null,
-  };
+async function getPixQr() {
+  throw notConfigured();
 }
 
+// Cancelamento é o único caminho tolerante: não há nada real para cancelar e os
+// chamadores usam isto como compensação best-effort (ver safeCancelCharge).
 async function cancelCharge() {
-  return true; // mock: sempre aceita
+  return true;
 }
 
 async function testConnection() {
@@ -120,6 +125,7 @@ async function testConnection() {
 
 module.exports = {
   name: 'mock',
+  PAYMENT_GATEWAY_NOT_CONFIGURED_MESSAGE,
   createCharge,
   getCharge,
   getPixQr,

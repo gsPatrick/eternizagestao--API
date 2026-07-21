@@ -11,6 +11,9 @@ const router = Router();
 router.use(auth, tenantResolver());
 
 router.get('/', controller.list);
+// Somente leitura — estado real do agendador. ANTES de '/:id' para não ser
+// capturada como um id de notificação.
+router.get('/automations', controller.listAutomations);
 router.get('/:id', controller.getById);
 
 // Avulsa (manual) e reenvio: admin ou operador.

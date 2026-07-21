@@ -18,11 +18,16 @@
  * Integrações POR CIDADE (Fase 2 — drivers reais, trocáveis):
  *   const email = require('../../providers/email');
  *   email.sendEmail(tenantSmtp, { to, subject, html, text }) => { providerMessageId }
- *     (usa o SMTP DA CIDADE via getIntegrationConfig; sem SMTP → driver mock/log)
+ *     (usa o SMTP DA CIDADE via getIntegrationConfig, ou o Resend da plataforma)
  *   const whatsapp = require('../../providers/whatsapp');
  *   whatsapp.sendText(tenant, numero, texto) => { providerMessageId }
  *     (usa a instância Evolution DA CIDADE; desconectado/sem Evolution → falha
  *      amigável na linha, NÃO derruba a fila)
+ *
+ * REGRA: INTEGRAÇÃO NÃO CONFIGURADA NUNCA VIRA 'enviada'. Sem SMTP/RESEND (e-mail)
+ * ou sem EVOLUTION_API_URL (WhatsApp) a linha é marcada 'falha' com a instrução
+ * de configuração no errorMessage. Um 'enviada' falso é pior que um erro: o
+ * operador acredita que o cidadão foi avisado quando nada saiu.
  *
  * Handlers registrados na fila 'notifications':
  *   dispatch        — envia UMA notificação (rethrow em falha → BullMQ faz retry)
@@ -222,11 +227,30 @@ async function dispatchOne(payload) {
       const vars = payload.vars || varsFromRecord(notification);
       const rendered = renderEmail(template, vars, { tenant });
 
-      // SMTP DA CIDADE (em claro, server-side); sem config → driver mock/log.
+      // SMTP DA CIDADE (em claro, server-side); sem config → Resend ou mock.
       // Disparo de plataforma força o remetente global (não usa SMTP da cidade).
       const config = isPlatform ? null : await integrationConfig(notification.tenantId);
       const tenantSmtp = config ? config.smtp : null;
       const driverName = email.resolveDriver ? email.resolveDriver(tenantSmtp).name : 'email';
+
+      // INTEGRAÇÃO AUSENTE ≠ ENVIO FEITO. Sem SMTP da cidade e sem RESEND_API_KEY
+      // o driver resolvido é o `mock`, que não entrega nada. Gravar 'enviada'
+      // aqui (como se fazia) escondia do operador que ninguém recebeu o aviso.
+      // Falha PERMANENTE: retry não conserta configuração — por isso marcamos a
+      // linha e RETORNAMOS sem relançar (não churn na fila).
+      if (driverName === 'mock') {
+        await notification.update({
+          status: 'falha',
+          provider: null,
+          errorMessage:
+            email.EMAIL_NOT_CONFIGURED_MESSAGE
+            || 'E-mail não configurado: defina o SMTP da cidade ou RESEND_API_KEY.',
+        });
+        console.warn(
+          `[email] envio RECUSADO → ${notification.recipientContact} | e-mail não configurado (sem SMTP da cidade e sem RESEND_API_KEY)`
+        );
+        return;
+      }
 
       console.log(
         `[email] enviando → ${notification.recipientContact} | template=${template} | driver=${driverName} | plataforma=${isPlatform}`
@@ -282,10 +306,18 @@ async function dispatchOne(payload) {
           providerMessageId,
         });
       } catch (waErr) {
+        // Distingue os dois "não enviou": integração AUSENTE (driver mock, sem
+        // EVOLUTION_API_URL) x instância da cidade desconectada. Em ambos a linha
+        // vira 'falha' — nunca 'enviada' —, mas a mensagem tem que dizer ao
+        // operador O QUE fazer. O driver mock lança WHATSAPP_NOT_CONFIGURED.
+        const notConfigured =
+          waErr.code === 'WHATSAPP_NOT_CONFIGURED' || whatsappProvider.name === 'mock';
         await notification.update({
           status: 'falha',
-          errorMessage:
-            'WhatsApp indisponível para esta cidade (instância desconectada ou não configurada).',
+          provider: null,
+          errorMessage: notConfigured
+            ? 'WhatsApp não configurado: o servidor Evolution (EVOLUTION_API_URL) não está definido. Nenhuma mensagem foi enviada.'
+            : 'WhatsApp indisponível para esta cidade (instância desconectada ou não configurada).',
         });
         console.warn('[notifications] envio WhatsApp falhou:', waErr.message);
         return; // não relança: a fila não é derrubada por WhatsApp desconectado
@@ -771,9 +803,28 @@ const CRON_SCAN_VENCIMENTOS = process.env.NOTIF_CRON_VENCIMENTOS || '30 9 * * *'
  * Chamado pelo worker.js. Sem Redis, apenas garante os handlers registrados.
  */
 async function startSchedulers() {
-  await scheduleRepeatable(QUEUE, JOB_SCAN_VENCIDOS, CRON_SCAN_VENCIDOS, scanVencidos);
-  await scheduleRepeatable(QUEUE, JOB_SCAN_VENCIMENTOS, CRON_SCAN_VENCIMENTOS, scanVencimentos);
-  return { scheduled: [JOB_SCAN_VENCIDOS, JOB_SCAN_VENCIMENTOS] };
+  // Reporta só o que REALMENTE foi agendado: sem Redis o scheduleRepeatable
+  // devolve { scheduled:false } e o job não entra na lista (antes a lista era
+  // fixa e o worker logava "agendamentos ativos" mesmo sem agendamento algum).
+  const vencidos = await scheduleRepeatable(
+    QUEUE,
+    JOB_SCAN_VENCIDOS,
+    CRON_SCAN_VENCIDOS,
+    scanVencidos
+  );
+  const vencimentos = await scheduleRepeatable(
+    QUEUE,
+    JOB_SCAN_VENCIMENTOS,
+    CRON_SCAN_VENCIMENTOS,
+    scanVencimentos
+  );
+  const scheduled = [];
+  if (vencidos.scheduled) scheduled.push(JOB_SCAN_VENCIDOS);
+  if (vencimentos.scheduled) scheduled.push(JOB_SCAN_VENCIMENTOS);
+  const failed = [JOB_SCAN_VENCIDOS, JOB_SCAN_VENCIMENTOS].filter(
+    (j) => !scheduled.includes(j)
+  );
+  return { scheduled, failed };
 }
 
 // ---------------------------------------------------------------------------

@@ -5,9 +5,15 @@
  * -----------------------------------------------------------------------------
  * Cada cidade (tenant) usa a PRÓPRIA conta do gateway. O driver é selecionado por
  * `tenantAsaas.provider` (default `asaas`), a partir da config em
- * `features/tenants/integration-config.js`. Sem apiKey configurada, cai no driver
- * `mock` → o dev nunca quebra. Trocar de gateway = novo driver com a MESMA
- * interface; nenhuma feature muda.
+ * `features/tenants/integration-config.js`. Sem apiKey configurada, o resolve cai
+ * no driver `mock`, que hoje é apenas a SENTINELA de "gateway não configurado":
+ * ele NÃO emite mais boleto/PIX fictícios (createCharge lança). Trocar de gateway
+ * = novo driver com a MESMA interface; nenhuma feature muda.
+ *
+ * REGRA DE HONESTIDADE (produção): código de barras aleatório e PIX inventado
+ * persistidos na Billing viram cobrança impagável na mão do cidadão. Emitir
+ * cobrança sem gateway configurado é RECUSADO — ver drivers/mock.createCharge e
+ * `assertGatewayConfigured` em billings.service.
  *
  * INTERFACE DO DRIVER (estável):
  *   name
@@ -39,7 +45,8 @@ function getDriver(name) {
 
 /**
  * Seleciona o driver para uma cidade a partir da sua config Asaas.
- * Sem apiKey => mock (degrada sem quebrar). Com apiKey => provider (default asaas).
+ * Sem apiKey => mock (SENTINELA: não emite nada). Com apiKey => provider
+ * (default asaas).
  * @param {object|null} tenantAsaas { apiKey, environment, provider }
  */
 function resolveDriver(tenantAsaas) {
@@ -48,10 +55,20 @@ function resolveDriver(tenantAsaas) {
   return drivers[tenantAsaas.provider || 'asaas'] || mockDriver;
 }
 
+/**
+ * A cidade tem gateway REAL configurado? Use antes de qualquer emissão para
+ * recusar cedo (sem persistir cobrança que nunca poderá ser paga).
+ * @param {object|null} tenantAsaas
+ */
+function isConfigured(tenantAsaas) {
+  return resolveDriver(tenantAsaas).name !== 'mock';
+}
+
 module.exports = {
   drivers,
   getDriver,
   resolveDriver,
+  isConfigured,
   asaas: asaasDriver,
   mock: mockDriver,
   // --- compat com o caminho MOCK legado (webhook HMAC + simulação) ---

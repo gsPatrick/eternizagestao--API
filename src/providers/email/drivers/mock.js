@@ -1,9 +1,12 @@
 'use strict';
 
 /**
- * Driver mock de e-mail (fallback quando o tenant NÃO tem SMTP configurado).
- * Não envia nada de verdade — apenas loga e devolve um id sintético.
- * NUNCA falha (é o default em dev e o fallback seguro em produção sem config).
+ * Driver mock de e-mail — SENTINELA de "e-mail não configurado".
+ * Não envia nada de verdade. NÃO é mais um caminho de envio: `providers/email`
+ * recusa o envio (AppError EMAIL_NOT_CONFIGURED) quando resolve para este
+ * driver, porque reportar sucesso sem entregar nada é mentir para o operador.
+ * O que resta aqui é só o rastro de log, útil quando alguém chama o driver
+ * diretamente em teste/desenvolvimento.
  *
  * Interface (idêntica ao driver real):
  *   sendEmail(tenantSmtp, { to, subject, html, text }) => { providerMessageId }

@@ -3,12 +3,25 @@
 /**
  * Driver mock de WhatsApp (fallback quando NÃO há EVOLUTION_API_URL).
  * Não conecta nada de verdade: devolve um QR PLACEHOLDER (honesto — deixa claro
- * que é modo demonstração) e status 'desconectado'. NUNCA lança (dev nunca quebra).
+ * que é modo demonstração) e status 'desconectado'.
+ *
+ * DUAS METADES, DUAS REGRAS:
+ *  - CONEXÃO (getQrCode/getStatus/ensureInstance/logout): continua não lançando.
+ *    A tela de conexão já mostra "modo demonstração" com `mock:true` — ali a
+ *    honestidade já existe e o operador não é enganado.
+ *  - ENVIO (sendText): LANÇA. Antes ele só logava e devolvia um id sintético, o
+ *    que fazia a notificação ser gravada como 'enviada' sem ninguém receber
+ *    nada. Mensagem não entregue tem que aparecer como falha.
  *
  * Mesma interface do driver real (evolution.js).
  */
-const crypto = require('crypto');
 const { instanceNameFor } = require('../shared');
+const AppError = require('../../../utils/app-error');
+
+// Mensagem única do estado "não configurado" (reusada no dispatch da notificação).
+const WHATSAPP_NOT_CONFIGURED_MESSAGE =
+  'WhatsApp não configurado: o servidor Evolution (EVOLUTION_API_URL) não está definido. '
+  + 'Nenhuma mensagem foi enviada.';
 
 // QR placeholder: SVG (data URL base64) que a UI renderiza como <img>. Deixa
 // explícito que o servidor Evolution não está configurado — sem botão morto.
@@ -42,12 +55,14 @@ async function getStatus(tenant) {
   return { instanceName: instanceNameFor(tenant), status: 'desconectado', mock: true };
 }
 
-async function sendText(tenant, number, text) {
-  // mock: apenas loga — nenhum envio real
-  console.log(
-    `[whatsapp:mock] instancia=${instanceNameFor(tenant)} para=${number} msg="${String(text).slice(0, 80)}..."`
+// ENVIO: recusa explícita. Sem servidor Evolution não existe entrega possível —
+// devolver um providerMessageId sintético faria a notificação constar como
+// 'enviada'. 503: a operação é válida, falta a integração.
+async function sendText(tenant, number) {
+  console.warn(
+    `[whatsapp:mock] envio RECUSADO — Evolution não configurado. instancia=${instanceNameFor(tenant)} para=${number}`
   );
-  return { providerMessageId: `wa_mock_${crypto.randomUUID()}` };
+  throw new AppError(WHATSAPP_NOT_CONFIGURED_MESSAGE, 503, 'WHATSAPP_NOT_CONFIGURED');
 }
 
 async function setWebhook() {
@@ -61,6 +76,7 @@ async function logout(tenant) {
 
 module.exports = {
   name: 'mock',
+  WHATSAPP_NOT_CONFIGURED_MESSAGE,
   instanceNameFor,
   ensureInstance,
   getQrCode,

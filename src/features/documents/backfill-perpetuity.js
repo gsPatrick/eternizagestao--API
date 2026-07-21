@@ -14,7 +14,11 @@
  *  - LIMITADO por execução (PERPETUITY_BACKFILL_BATCH, padrão 200) para não
  *    pesar o start nem o Chromium do PDF; o restante sai nos próximos boots.
  *  - BEST-EFFORT: falha em uma sepultura não interrompe as demais nem a API.
- *  - Desligável com PERPETUITY_BACKFILL=false.
+ *  - OPT-IN: no boot só roda com PERPETUITY_BACKFILL=true. Emitir documento
+ *    oficial não pode ser efeito colateral de todo restart de container.
+ *    Uso manual:
+ *      node -e "require('./src/features/documents/backfill-perpetuity')
+ *        .backfillPerpetuityCertificates().then(console.log)"
  */
 
 const { Op } = require('sequelize');

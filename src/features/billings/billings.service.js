@@ -22,9 +22,33 @@ const baseIncludes = [
 // ---------------------------------------------------------------------------
 // Integração com o gateway — POR CIDADE (driver trocável).
 // Cada tenant usa a PRÓPRIA conta: resolvemos o driver a partir da config
-// (Asaas real quando há apiKey; mock quando não há → dev não quebra). O id da
-// billing é gerado antes e vira o externalReference no gateway.
+// (Asaas real quando há apiKey). O id da billing é gerado antes e vira o
+// externalReference no gateway.
+//
+// REGRA: SEM GATEWAY CONFIGURADO, NÃO SE EMITE COBRANÇA. Antes o driver mock
+// devolvia código de barras aleatório e PIX inventado e a Billing PERSISTIA
+// isso — cobrança impagável na mão do cidadão e caixa "cobrado" que nunca
+// entra. A emissão agora é RECUSADA ANTES de gravar qualquer linha.
 // ---------------------------------------------------------------------------
+const GATEWAY_NOT_CONFIGURED_MESSAGE =
+  'Gateway de pagamento não configurado: cadastre a chave da conta Asaas desta cidade '
+  + 'em Configurações › Integrações antes de emitir cobranças. Nenhuma cobrança foi emitida.';
+
+/**
+ * Recusa a emissão quando a cidade não tem gateway real. Chamado NO INÍCIO de
+ * create/generate/reissue — falhar antes do INSERT evita cobrança órfã sem
+ * boleto/PIX no sistema.
+ * @param {string} tenantId
+ * @returns {Promise<object>} a config de integrações da cidade (reaproveitada)
+ */
+async function assertGatewayConfigured(tenantId) {
+  const config = await getIntegrationConfig(tenantId);
+  if (resolveDriver(config.asaas).name === 'mock') {
+    // 503: a operação é válida, falta a integração — não é erro de payload.
+    throw new AppError(GATEWAY_NOT_CONFIGURED_MESSAGE, 503, 'PAYMENT_GATEWAY_NOT_CONFIGURED');
+  }
+  return config;
+}
 function mapPayer(payer) {
   if (!payer) return null;
   return {
@@ -37,7 +61,9 @@ function mapPayer(payer) {
 }
 
 async function createGatewayCharge(billing, totalAmount, dueDate, payer) {
-  const config = await getIntegrationConfig(billing.tenantId);
+  // Defesa em profundidade: mesmo que algum caminho novo esqueça o assert de
+  // entrada, aqui a emissão com driver mock morre antes de gravar dado falso.
+  const config = await assertGatewayConfigured(billing.tenantId);
   const driver = resolveDriver(config.asaas);
   const charge = await driver.createCharge(config.asaas, {
     billingId: billing.id,
@@ -116,10 +142,13 @@ async function attachGatewayCharge(billing, totalAmount, dueDate, payer) {
     await billing.update(gatewayFields);
   } catch (err) {
     // charge não criado — Billing permanece pendente e reprocessável; melhor do
-    // que um charge órfão cobrando sem cobrança persistida no sistema. NÃO
-    // bloqueia a emissão (best-effort): loga e registra em PaymentGatewayEvent.
+    // que um charge órfão cobrando sem cobrança persistida no sistema. Falha
+    // TRANSITÓRIA (gateway fora do ar) é best-effort: loga e registra evento.
     console.error(`[billings] falha ao criar charge no gateway p/ billing=${billing.id}: ${err.message}`);
     await recordGatewayFailure(billing, 'charge.create.failed', err.message);
+    // Falha de CONFIGURAÇÃO não é best-effort: o operador precisa ver o erro na
+    // tela (nada a reprocessar enquanto não houver chave Asaas cadastrada).
+    if (err.code === 'PAYMENT_GATEWAY_NOT_CONFIGURED') throw err;
   }
   return billing;
 }
@@ -258,6 +287,9 @@ async function create(tenantId, data, userId) {
     throw AppError.badRequest("Origem inválida — use 'avulsa' ou 'servico'.", 'INVALID_ORIGIN');
   }
 
+  // Sem gateway real não há boleto/PIX possível — recusa ANTES de persistir.
+  await assertGatewayConfigured(tenantId);
+
   const payer = await Person.findOne({ where: { id: data.payerPersonId, tenantId } });
   if (!payer) throw AppError.notFound('Pagador não encontrado.');
 
@@ -330,6 +362,10 @@ async function create(tenantId, data, userId) {
 // Geração em lote a partir das taxas de manutenção ativas
 // ---------------------------------------------------------------------------
 async function generate(tenantId, { until } = {}, userId) {
+  // Geração em lote sem gateway configurado produziria N cobranças impagáveis —
+  // recusa a rodada inteira antes de tocar no banco.
+  await assertGatewayConfigured(tenantId);
+
   const limitDate = until || toDateOnly(new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)); // hoje + 30d
 
   const fees = await MaintenanceFee.findAll({
@@ -449,6 +485,10 @@ async function generate(tenantId, { until } = {}, userId) {
 // 2ª via — nova cobrança + cancelamento da origem (reutilizada pelo Portal da Família)
 // ---------------------------------------------------------------------------
 async function reissue(tenantId, billingId, { dueDate } = {}, userId = null) {
+  // 2ª via é uma NOVA cobrança: mesma regra da emissão — sem gateway, recusa
+  // antes de cancelar a original (senão a cidade ficaria sem nenhuma das duas).
+  await assertGatewayConfigured(tenantId);
+
   const original = await Billing.findOne({
     where: { id: billingId, tenantId },
     include: [{ model: Person, as: 'payer', attributes: ['id', 'fullName', 'cpf', 'email'] }],

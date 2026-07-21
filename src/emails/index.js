@@ -19,6 +19,14 @@ const EMAILS = {
     subject: 'Redefinição de senha · Eterniza Gestão',
     preheader: 'Crie uma nova senha para sua conta.',
   },
+  // Código de 6 dígitos da recuperação de senha (painel e Portal da Família).
+  // O código vai no CORPO, nunca no assunto: o assunto aparece em prévia de
+  // notificação/tela bloqueada e vazaria o segredo para quem olha o celular.
+  'password-reset-code': {
+    template: 'password-reset-code',
+    subject: 'Código de recuperação de senha · {{tenant_name}}',
+    preheader: 'Use o código para criar uma nova senha.',
+  },
   'user-invite': {
     template: 'user-invite',
     subject: 'Você foi convidado para o {{tenant_name}}',

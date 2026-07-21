@@ -146,10 +146,21 @@ if (require.main === module) {
   const { sequelize } = require('./src/models');
   const { runMigrations } = require('./src/utils/run-migrations');
 
+  const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
   // AUTO-MIGRAÇÃO no boot: garante o schema do banco SEMPRE atualizado ao subir
   // a API (o cliente configura só via Dockerfile). Roda ANTES de aceitar tráfego.
-  // Best-effort: se falhar (ex.: banco indisponível no 1º milissegundo), loga e
-  // segue — o schema pode já estar em dia. Desligue com AUTO_MIGRATE=false.
+  // Desligue com AUTO_MIGRATE=false.
+  //
+  // ENDURECIMENTO: antes a exceção era engolida e o servidor subia mesmo assim —
+  // a API passava a aceitar tráfego com o schema desatualizado e quebrava em
+  // runtime ("column ... does not exist"), com erro 500 espalhado e difícil de
+  // diagnosticar. Agora:
+  //   - PRODUÇÃO: falha de migration ABORTA o boot (process.exit(1)). O EasyPanel
+  //     reinicia/marca o serviço como falho — melhor indisponível e visível do
+  //     que "no ar" servindo erros silenciosos com dados possivelmente corrompidos.
+  //   - DESENVOLVIMENTO: mantém o comportamento tolerante (loga e segue), para
+  //     não travar o nodemon quando o Postgres local ainda está subindo.
   async function applyMigrations() {
     if (process.env.AUTO_MIGRATE === 'false') return;
     try {
@@ -158,16 +169,37 @@ if (require.main === module) {
       console.log('[boot] banco em dia (migrations aplicadas).');
     } catch (err) {
       console.error('[boot] falha ao aplicar migrations:', err.message);
+      if (IS_PRODUCTION) {
+        console.error(
+          '[boot] ABORTANDO: em produção a API NÃO sobe com o schema fora de '
+          + 'sincronia. Verifique a conectividade/credenciais do Postgres e a '
+          + 'migration que falhou acima e refaça o deploy. '
+          + '(Para subir mesmo assim, em último caso: AUTO_MIGRATE=false.)'
+        );
+        process.exit(1);
+      }
+      console.warn('[boot] seguindo mesmo assim (ambiente de desenvolvimento).');
     }
   }
 
   // BACKFILL das Certidões de Perpetuidade: emite as que faltam nas sepulturas
   // JÁ marcadas como "Perpétuo" (a emissão automática passou a existir depois, e
-  // o bug do acento impedia até as novas). Idempotente e limitado por execução —
-  // roda DEPOIS que a API já está atendendo, para não atrasar o start.
-  // Desligue com PERPETUITY_BACKFILL=false.
+  // o bug do acento impedia até as novas). Idempotente e limitado por execução.
+  //
+  // ENDURECIMENTO (decisão): este backfill EMITE DOCUMENTOS OFICIAIS. Antes ele
+  // era OPT-OUT (rodava sempre, salvo PERPETUITY_BACKFILL=false), ou seja, todo
+  // restart de container — inclusive um restart automático do EasyPanel às 3h da
+  // manhã — podia emitir certidões em lote, eventualmente no formato DEGRADADO
+  // (fallback de PDF sem layout/logo, ver documents.service). Emissão de
+  // documento oficial não pode ser efeito colateral de restart.
+  // Passou a ser OPT-IN EXPLÍCITO: só roda com PERPETUITY_BACKFILL=true, que se
+  // configura para um deploy pontual e se remove em seguida.
+  // Uso manual (recomendado), sem depender do boot:
+  //   node -e "require('./src/features/documents/backfill-perpetuity')
+  //     .backfillPerpetuityCertificates().then(console.log)"
   async function runPerpetuityBackfill() {
-    if (process.env.PERPETUITY_BACKFILL === 'false') return;
+    if (process.env.PERPETUITY_BACKFILL !== 'true') return;
+    console.log('[boot] PERPETUITY_BACKFILL=true — emitindo certidões pendentes...');
     try {
       const { backfillPerpetuityCertificates } = require('./src/features/documents/backfill-perpetuity');
       const r = await backfillPerpetuityCertificates();

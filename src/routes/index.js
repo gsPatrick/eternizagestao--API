@@ -44,6 +44,8 @@ router.use('/v1/public', require('../features/public-tenants/public-tenants.rout
 router.use('/v1/public', require('../features/public-search/public-search.routes'));
 router.use('/v1/public', require('../features/public-map/public-map.routes'));
 router.use('/v1/portal', require('../features/family-portal/family-portal.routes'));
+// Recuperação de senha (painel e portal): quem esqueceu a senha não tem sessão.
+router.use('/v1/password-resets', require('../features/password-resets/password-resets.routes'));
 
 /* -------------------------------------------------------------------------
  * Fase 0 — Fundação

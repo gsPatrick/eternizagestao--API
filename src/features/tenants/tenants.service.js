@@ -636,8 +636,10 @@ async function testEmail(tenantId) {
       text: 'Este é um e-mail de teste do Eterniza Gestão. Se você recebeu esta mensagem, '
         + 'o servidor SMTP da sua cidade está configurado corretamente.',
     });
-    const via = driver.name === 'mock' ? ' (modo demonstração — nenhum envio real)' : '';
-    return { ok: true, message: `E-mail de teste enviado para ${to}${via}.` };
+    // O ramo "modo demonstração" saiu: sendEmail agora LANÇA quando cairia no
+    // driver mock, então chegar aqui significa envio real — dizer o contrário
+    // era justamente o tipo de meia-verdade que estamos eliminando.
+    return { ok: true, message: `E-mail de teste enviado para ${to}.` };
   } catch (err) {
     return { ok: false, message: friendlySmtpError(err) };
   }

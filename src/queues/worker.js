@@ -50,9 +50,21 @@ function start() {
 
   // Liga as automações por tempo (repeatable jobs). Só têm efeito real com
   // Redis — sem ele os handlers já ficam registrados, mas não há cron.
+  // O log espelha o resultado REAL: startSchedulers agora devolve também os que
+  // NÃO entraram. Antes ele anunciava "agendamentos ativos" mesmo quando nenhum
+  // cron havia sido registrado — e ninguém descobria que os avisos automáticos
+  // de inadimplência simplesmente não rodavam.
   notifications
     .startSchedulers()
-    .then((r) => console.log(`[worker] agendamentos ativos: ${r.scheduled.join(', ')}`))
+    .then((r) => {
+      console.log(`[worker] agendamentos ativos: ${r.scheduled.join(', ') || 'nenhum'}`);
+      if (r.failed && r.failed.length) {
+        console.error(
+          `[worker] agendamentos NÃO registrados: ${r.failed.join(', ')} — `
+          + 'nenhum aviso automático será disparado até que isto seja resolvido.'
+        );
+      }
+    })
     .catch((err) => console.error('[worker] falha ao iniciar agendamentos:', err.message));
 
   async function shutdown(signal) {

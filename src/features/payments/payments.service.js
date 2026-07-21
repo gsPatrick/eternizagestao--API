@@ -404,10 +404,17 @@ async function processAsaasWebhook({ req, rawBody } = {}) {
 
 // ---------------------------------------------------------------------------
 // Simulação de confirmação do gateway (baixa automática) — botão "Simular
-// confirmação" da tela de Cobranças. Só disponível com o gateway MOCK.
+// confirmação" da tela de Cobranças. Ferramenta de DESENVOLVIMENTO.
 // Monta um payload 'charge.paid' assinado com o MESMO segredo do webhook e o
 // injeta em processWebhook — assim exercita EXATAMENTE o caminho endurecido
 // (registro do evento + lock + idempotência), sem duplicar a lógica de baixa.
+//
+// TRAVA (corrigida): a guarda antiga era `gateway.name !== 'mock'`, e
+// `gateway.name` é a constante 'mock' reexportada pelo provider por compat —
+// ou seja, NUNCA disparava. Qualquer admin podia dar baixa fictícia numa
+// cobrança REAL do Asaas. Agora a verificação resolve o driver DA CIDADE
+// (mesma config que billings usa) e, além disso, a simulação é proibida em
+// produção — lá baixa só entra por webhook do gateway ou baixa manual auditada.
 // ---------------------------------------------------------------------------
 function webhookSecretForSimulation() {
   // Mesma resolução do provider (provider/payment-gateway/index.js). Em produção
@@ -416,8 +423,23 @@ function webhookSecretForSimulation() {
 }
 
 async function simulateGatewayPayment(tenantId, billingId, { method } = {}) {
-  if (gateway.name !== 'mock') {
-    throw AppError.badRequest('Simulação de gateway disponível apenas com o driver mock.', 'SIMULATION_UNAVAILABLE');
+  // 1) Produção NUNCA simula baixa — nem com driver mock. Dinheiro só entra por
+  //    webhook autenticado do gateway ou por baixa manual registrada.
+  if (process.env.NODE_ENV === 'production') {
+    throw AppError.forbidden(
+      'Simulação de confirmação de pagamento é indisponível em produção.',
+      'SIMULATION_UNAVAILABLE'
+    );
+  }
+
+  // 2) Driver REAL da cidade (não a constante de compat do provider): se a
+  //    cidade tem Asaas configurado, a cobrança é real e não se simula baixa.
+  const config = await getIntegrationConfig(tenantId);
+  if (gateway.resolveDriver(config.asaas).name !== 'mock') {
+    throw AppError.badRequest(
+      'Simulação de gateway disponível apenas quando a cidade não tem gateway real configurado.',
+      'SIMULATION_UNAVAILABLE'
+    );
   }
 
   const billing = await Billing.findOne({ where: { id: billingId, tenantId } });

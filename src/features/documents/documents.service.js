@@ -362,36 +362,98 @@ function notifyDocumentIssued(document) {
 // O documento sai em PDF fiel ao HTML BRANDED. O provider (providers/pdf) tem
 // abstração de driver (puppeteer → fallback) e NUNCA lança: a geração aqui é
 // SEMPRE best-effort — se falhar, mantém o HTML e loga, sem derrubar a emissão.
+//
+// PDF DEGRADADO (endurecimento):
+// -----------------------------------------------------------------------------
+// Quando o Chromium não está disponível/falha, o provider degrada para o driver
+// `fallback`, que produz um PDF VÁLIDO (começa com `%PDF-`) mas SEM layout, SEM
+// logotipo e SEM cores — um documento oficial visualmente pobre. A validação
+// antiga (só o header `%PDF-`) NÃO distinguia o fiel do degradado, e como
+// `ensureDocumentPdf` gerava uma única vez, uma certidão degradada ficava assim
+// para sempre. Agora:
+//   1) descobrimos qual driver realmente produziu os bytes (assinatura do
+//      arquivo, ver `detectPdfDriver`) e REGISTRAMOS em `document.pdfDriver`,
+//      permitindo auditar/reemitir depois (ex.: WHERE pdf_driver = 'fallback');
+//   2) um PDF de fallback NÃO é definitivo: a próxima chamada tenta gerar o
+//      fiel de novo (quando o driver fiel voltar a estar disponível).
+
+// Driver que produz o PDF DEGRADADO (sem layout/logo/cores).
+const PDF_DRIVER_DEGRADED = 'fallback';
+
+/**
+ * Descobre qual driver gerou os bytes do PDF, pela assinatura do arquivo —
+ * o provider não devolve essa informação junto do Buffer (e `resolveDriverName`
+ * só diz quem *atenderia agora*, não quem atendeu; uma falha de launch do
+ * Chromium cai no fallback sem mudar o nome resolvido).
+ *   - Chromium/Puppeteer imprime via Skia → `/Producer (Skia/PDF m###)`.
+ *   - Nosso fallback monta o PDF à mão: sem `/Producer`, Helvetica base-14.
+ * @returns {'puppeteer'|'fallback'|string}
+ */
+function detectPdfDriver(buffer) {
+  const bytes = buffer.toString('latin1');
+  if (bytes.includes('Skia/PDF')) return 'puppeteer';
+  if (bytes.includes('/BaseFont /Helvetica') && !bytes.includes('/Producer')) {
+    return PDF_DRIVER_DEGRADED;
+  }
+  // Driver novo/desconhecido: registra o que o provider diz estar ativo.
+  return typeof pdf.resolveDriverName === 'function' ? pdf.resolveDriverName() : 'desconhecido';
+}
 
 // Gera o PDF a partir do HTML branded e o armazena (.pdf por tenant). Devolve o
-// fileUrl do PDF, ou null se a geração/gravação falhar.
+// fileUrl do PDF + o driver que efetivamente o produziu.
 async function generateAndStorePdf(document, html) {
   const buffer = await pdf.htmlToPdf(html, { format: PDF_FORMAT });
   if (!buffer || !buffer.length || buffer.slice(0, 5).toString() !== '%PDF-') {
     throw new Error('geração de PDF não produziu um arquivo válido');
   }
+  const pdfDriver = detectPdfDriver(buffer);
   const file = await storage.saveFile({
     tenantId: document.tenantId,
     fileName: `${document.documentType}-${document.number}-${document.year}.pdf`,
     content: buffer,
     mimeType: 'application/pdf',
   });
-  return file.fileUrl;
+  return { pdfUrl: file.fileUrl, pdfDriver, buffer };
 }
 
 // Garante o pdfUrl do documento (gera+armazena+persiste se ainda não houver).
 // Best-effort: qualquer falha é logada e devolve o pdfUrl atual (possivelmente null).
+// Um PDF já gerado pelo driver DEGRADADO não é considerado definitivo: tentamos
+// gerar o fiel de novo (só quando o driver fiel voltou a estar disponível — senão
+// gastaríamos CPU a cada chamada para reproduzir o mesmo fallback).
 async function ensureDocumentPdf(document, html) {
-  if (document.pdfUrl) return document.pdfUrl;
+  if (document.pdfUrl && !shouldRegeneratePdf(document)) return document.pdfUrl;
   try {
-    const pdfUrl = await generateAndStorePdf(document, html);
+    const { pdfUrl, pdfDriver } = await generateAndStorePdf(document, html);
+    if (document.pdfUrl && pdfDriver === PDF_DRIVER_DEGRADED) {
+      // Continua degradado: mantém o que já existe e não reescreve o arquivo.
+      return document.pdfUrl;
+    }
+    if (pdfDriver === PDF_DRIVER_DEGRADED) {
+      console.warn(
+        `[documents] PDF do documento ${document.formattedNumber} gerado em modo DEGRADADO `
+        + '(sem layout/logo): Chromium indisponível. Registrado em pdf_driver para reemissão.'
+      );
+    }
     // skipAudit: gravação técnica do artefato, não é uma ação semântica auditável.
-    await document.update({ pdfUrl }, { skipAudit: true });
+    await document.update({ pdfUrl, pdfDriver }, { skipAudit: true });
     return pdfUrl;
   } catch (err) {
     console.error('[documents] geração de PDF falhou (mantendo HTML):', err.message);
     return document.pdfUrl || null;
   }
+}
+
+/**
+ * O PDF armazenado é degradado E o driver fiel voltou a estar disponível?
+ * Nesse caso vale a pena tentar regerar (documento oficial merece o layout fiel).
+ * Documentos antigos (pdfDriver null, anteriores a este campo) NÃO são regerados:
+ * não sabemos como foram feitos e reemissão é decisão de operação, não automática.
+ */
+function shouldRegeneratePdf(document) {
+  if (document.pdfDriver !== PDF_DRIVER_DEGRADED) return false;
+  const available = typeof pdf.resolveDriverName === 'function' ? pdf.resolveDriverName() : null;
+  return Boolean(available) && available !== PDF_DRIVER_DEGRADED;
 }
 
 // Recupera o HTML branded persistido de um documento (fonte para (re)gerar o PDF).
@@ -741,16 +803,19 @@ async function getOrCreatePdf(tenantId, id) {
   const document = await Document.findOne({ where: { id, tenantId } });
   if (!document) throw AppError.notFound('Documento não encontrado.');
 
-  // Já existe o PDF armazenado (local) → serve direto.
-  if (document.pdfUrl) {
+  // Já existe o PDF armazenado (local) → serve direto. EXCETO se o armazenado
+  // for o DEGRADADO (fallback) e o driver fiel já estiver disponível: aí vale
+  // regerar, para o download entregar o documento oficial com layout/logo.
+  if (document.pdfUrl && !shouldRegeneratePdf(document)) {
     const cached = storage.readLocalFile(document.pdfUrl);
     if (cached && cached.length) return { buffer: cached, document };
   }
 
-  // (Re)gera do HTML branded persistido e cacheia (preenche pdfUrl).
+  // (Re)gera do HTML branded persistido e cacheia (preenche pdfUrl/pdfDriver).
   const html = readDocumentHtml(document);
   if (!html) throw AppError.badRequest('HTML de origem do documento indisponível para gerar o PDF.');
   const buffer = await pdf.htmlToPdf(html, { format: PDF_FORMAT });
+  const pdfDriver = detectPdfDriver(buffer);
   try {
     const file = await storage.saveFile({
       tenantId,
@@ -758,7 +823,7 @@ async function getOrCreatePdf(tenantId, id) {
       content: buffer,
       mimeType: 'application/pdf',
     });
-    await document.update({ pdfUrl: file.fileUrl }, { skipAudit: true });
+    await document.update({ pdfUrl: file.fileUrl, pdfDriver }, { skipAudit: true });
   } catch (err) {
     // Falha ao persistir não impede a entrega do PDF já gerado.
     console.error('[documents] cache do PDF falhou:', err.message);

@@ -30,6 +30,11 @@ module.exports = (sequelize, DataTypes) => {
       personId: { type: DataTypes.UUID },
       fileUrl: { type: DataTypes.STRING(500) }, // HTML branded (fonte do PDF)
       pdfUrl: { type: DataTypes.STRING(500) }, // PDF oficial gerado do HTML
+      // Driver que REALMENTE gerou o pdfUrl ('puppeteer' = fiel ao layout;
+      // 'fallback' = degradado, sem layout/logo/cores). Serve para auditar e
+      // reemitir documentos que saíram degradados por falta de Chromium.
+      // null = documento anterior a este campo (origem desconhecida).
+      pdfDriver: { type: DataTypes.STRING(20) },
       status: {
         type: DataTypes.ENUM('emitido', 'aguardando_assinatura', 'assinado', 'cancelado'),
         allowNull: false,

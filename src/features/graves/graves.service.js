@@ -6,10 +6,18 @@ const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const graveEvents = require('../grave-timeline/grave-event.recorder');
 const graveStatuses = require('../grave-statuses/grave-statuses.service');
 const audit = require('../audit-logs/audit.service');
+const storage = require('../../providers/storage');
 const {
   sequelize, Grave, GraveStatus, Lot, Street, Block, Cemetery,
   Concession, Person, Burial, Deceased, Document,
 } = require('../../models');
+
+// FOTOGRAFIA da sepultura (campo do formulário do cliente). Mesmos limites da
+// foto de pessoa/sepultado — 5 MB, imagem comum.
+const PHOTO_MIME_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/webp'];
+const PHOTO_MAX_BYTES = 5 * 1024 * 1024;
+const PHOTO_URL_TTL_SECONDS = Number(process.env.PHOTO_URL_TTL_SECONDS || 7 * 24 * 3600);
+const signPhoto = (url) => (url ? storage.signedUrl(url, { ttlSeconds: PHOTO_URL_TTL_SECONDS }) : url);
 
 /**
  * "Perpétuo" tem ACENTO: /perpet/ NÃO casa com "perp-é-tuo" (quebra no `é`).
@@ -106,6 +114,9 @@ async function buildListWhere(tenantId, query) {
     where.statusId = st ? st.id : '00000000-0000-0000-0000-000000000000';
   }
   if (query.unitType) where.unitType = query.unitType;
+  // UTILIZAÇÃO (Rotativo/Perpétuo) — filtro da listagem do cliente. iLike para
+  // casar independente de caixa e de digitação parcial.
+  if (query.utilizacao) where.utilizacao = { [Op.iLike]: `%${query.utilizacao}%` };
   if (query.blocked !== undefined) where.isBlocked = query.blocked === 'true';
   if (query.onlyRoot === 'true' || query.onlyRoot === true) where.parentGraveId = null;
 
@@ -163,8 +174,21 @@ function lotInclude(query) {
     streetInclude.required = true;
     streetInclude.include = [{ model: Block, as: 'block', where: { id: query.blockId }, required: true }];
   }
-  const required = Boolean(query.blockId || query.streetId);
-  return { model: Lot, as: 'lot', required, include: [streetInclude] };
+  // QUADRA por TEXTO: na listagem do cliente a quadra é digitada, não escolhida
+  // numa lista de ids (são milhares de quadras).
+  if (query.block) {
+    streetInclude.required = true;
+    streetInclude.include = [{
+      model: Block, as: 'block', required: true,
+      where: { code: { [Op.iLike]: `%${query.block}%` } },
+    }];
+  }
+  // LOTE por TEXTO, mesma razão.
+  const lotWhere = query.lot ? { code: { [Op.iLike]: `%${query.lot}%` } } : undefined;
+  const required = Boolean(query.blockId || query.streetId || query.block || query.lot);
+  const include = { model: Lot, as: 'lot', required, include: [streetInclude] };
+  if (lotWhere) include.where = lotWhere;
+  return include;
 }
 
 // include APENAS para filtrar (quadra/rua) sem selecionar colunas — necessário
@@ -173,12 +197,15 @@ function lotInclude(query) {
 function lotFilterInclude(query) {
   const blockInclude = { model: Block, as: 'block', attributes: [], required: true };
   if (query.blockId) blockInclude.where = { id: query.blockId };
+  else if (query.block) blockInclude.where = { code: { [Op.iLike]: `%${query.block}%` } };
   const streetInclude = {
     model: Street, as: 'street', attributes: [], required: true,
     include: [blockInclude],
   };
   if (query.streetId) streetInclude.where = { id: query.streetId };
-  return { model: Lot, as: 'lot', attributes: [], required: true, include: [streetInclude] };
+  const include = { model: Lot, as: 'lot', attributes: [], required: true, include: [streetInclude] };
+  if (query.lot) include.where = { code: { [Op.iLike]: `%${query.lot}%` } };
+  return include;
 }
 
 async function list(tenantId, query) {
@@ -252,7 +279,7 @@ async function statusCounts(tenantId, query) {
   const grouped = await Grave.findAll({
     where,
     attributes: ['statusId', [sequelize.fn('COUNT', sequelize.col('Grave.id')), 'total']],
-    include: (query.blockId || query.streetId) ? [lotFilterInclude(query)] : [],
+    include: (query.blockId || query.streetId || query.block || query.lot) ? [lotFilterInclude(query)] : [],
     group: ['statusId'],
     raw: true,
   });
@@ -347,6 +374,39 @@ async function resolveLotFromText(tenantId, { cemeteryId, block, street, lot }, 
   return lotRow;
 }
 
+/**
+ * CÓDIGO da sepultura derivado de QUADRA-LOTE.
+ *
+ * O sistema do cliente não pede um código: a sepultura é "Quadra Q4P1C4, Lote
+ * 01". Montamos o código a partir disso e, quando a mesma quadra/lote já tem
+ * sepultura, acrescentamos um sufixo sequencial (-2, -3, ...). O código segue
+ * ÚNICO por cemitério, que é o que o índice exige.
+ *
+ * Considera também os registros SOFT-DELETED (paranoid: false): o índice único
+ * enxerga a linha apagada, então ignorá-la geraria colisão na hora do insert.
+ */
+async function nextGraveCode(tenantId, lot, transaction) {
+  const block = await Block.findOne({
+    where: { tenantId, id: (await Street.findByPk(lot.streetId, { transaction }))?.blockId || null },
+    transaction,
+  });
+  const base = [block?.code, lot.code].filter(Boolean).join('-') || 'SEP';
+
+  const taken = await Grave.findAll({
+    where: { tenantId, cemeteryId: lot.cemeteryId, code: { [Op.like]: `${base}%` } },
+    attributes: ['code'],
+    paranoid: false,
+    raw: true,
+    transaction,
+  });
+  const used = new Set(taken.map((g) => g.code));
+  if (!used.has(base)) return base;
+  for (let n = 2; ; n += 1) {
+    const candidate = `${base}-${n}`;
+    if (!used.has(candidate)) return candidate;
+  }
+}
+
 async function create(tenantId, data, userId) {
   const grave = await sequelize.transaction(async (transaction) => {
     // Jazigo pai (gaveta) — validado antes: pode fornecer o LOTE por herança,
@@ -388,6 +448,14 @@ async function create(tenantId, data, userId) {
     const graveData = {};
     for (const f of EDITABLE_FIELDS) {
       if (data[f] !== undefined) graveData[f] = data[f];
+    }
+
+    // CÓDIGO automático: no sistema do cliente a sepultura é identificada por
+    // cemitério + quadra + lote — não existe um "código da unidade" para digitar.
+    // Derivamos daí e desempatamos com sufixo quando a mesma quadra/lote tem
+    // mais de uma sepultura (o código continua ÚNICO por cemitério).
+    if (!graveData.code) {
+      graveData.code = await nextGraveCode(tenantId, lot, transaction);
     }
 
     const grave = await Grave.create(
@@ -520,8 +588,38 @@ async function remove(tenantId, id) {
   await grave.destroy(); // soft delete
 }
 
+/**
+ * Upload da FOTOGRAFIA da sepultura (base64). Espelha deceased.uploadPhoto:
+ * valida tipo/tamanho, grava via storage e devolve a URL ASSINADA para exibição
+ * imediata no painel.
+ */
+async function uploadPhoto(tenantId, id, { contentBase64, fileName, mimeType } = {}) {
+  const grave = await Grave.findOne({ where: { id, tenantId } });
+  if (!grave) throw AppError.notFound('Sepultura não encontrada.');
+
+  if (!contentBase64) throw AppError.badRequest('Envie o arquivo da foto (contentBase64).', 'MISSING_FILE');
+  const mime = String(mimeType || '').toLowerCase();
+  if (!PHOTO_MIME_TYPES.includes(mime)) {
+    throw AppError.badRequest('Formato inválido. Envie uma imagem PNG, JPEG ou WEBP.', 'INVALID_IMAGE_TYPE');
+  }
+  const buffer = Buffer.from(contentBase64, 'base64');
+  if (!buffer.length) throw AppError.badRequest('Arquivo de foto vazio ou inválido.', 'INVALID_FILE');
+  if (buffer.length > PHOTO_MAX_BYTES) {
+    throw AppError.badRequest('Imagem muito grande. O limite é 5 MB.', 'FILE_TOO_LARGE');
+  }
+
+  const saved = await storage.saveFile({
+    tenantId,
+    fileName: fileName || 'sepultura.png',
+    content: buffer,
+    mimeType: mime,
+  });
+  await grave.update({ photoUrl: saved.fileUrl });
+  return { photoUrl: signPhoto(saved.fileUrl) };
+}
+
 module.exports = {
-  list, statusCounts, getById, summary, create, update, changeStatus, setBlocked, remove, EDITABLE_FIELDS,
+  list, statusCounts, getById, summary, create, update, changeStatus, setBlocked, remove, uploadPhoto, EDITABLE_FIELDS,
   // reaproveitados pelo backfill de certidões (mesma regra da emissão automática)
   ensurePerpetuityCertificate, isPerpetualUse,
 };

@@ -24,9 +24,10 @@ const summary = catchAsync(async (req, res) => {
 });
 
 const create = catchAsync(async (req, res) => {
-  // `code` é obrigatório; a LOCALIZAÇÃO pode vir por lotId (compat) OU por texto
-  // (cemeteryId + quadra/lote) — a validação do "onde" fica no service.
-  requireFields(req.body, ['code']);
+  // `code` é OPCIONAL: o sistema do cliente identifica a sepultura por
+  // cemitério + quadra + lote, e o service deriva o código daí quando não vem.
+  // A LOCALIZAÇÃO pode vir por lotId (compat) OU por texto (cemeteryId +
+  // quadra/lote) — a validação do "onde" fica no service.
   const data = pick(req.body, [
     'lotId', 'cemeteryId', 'block', 'street', 'lot',
     'ownerPersonId', 'responsiblePersonId',
@@ -58,4 +59,11 @@ const remove = catchAsync(async (req, res) => {
   return noContent(res);
 });
 
-module.exports = { list, statusCounts, getById, summary, create, update, changeStatus, block, unblock, remove };
+// POST /v1/graves/:id/photo — fotografia da sepultura (imagem base64).
+const uploadPhoto = catchAsync(async (req, res) => {
+  requireFields(req.body, ['contentBase64', 'mimeType']);
+  const data = pick(req.body, ['contentBase64', 'fileName', 'mimeType']);
+  return ok(res, await service.uploadPhoto(getTenantId(req), req.params.id, data));
+});
+
+module.exports = { list, statusCounts, getById, summary, create, update, changeStatus, block, unblock, remove, uploadPhoto };

@@ -17,6 +17,7 @@ router.get('/:id', controller.getById);
 router.get('/:id/summary', controller.summary);
 router.post('/', write, controller.create);
 router.patch('/:id', write, controller.update);
+router.post('/:id/photo', write, controller.uploadPhoto);
 router.patch('/:id/status', write, controller.changeStatus);
 router.patch('/:id/block', authorize('admin'), controller.block);
 router.patch('/:id/unblock', authorize('admin'), controller.unblock);

@@ -16,6 +16,18 @@ ENV PUPPETEER_SKIP_DOWNLOAD=true \
 
 WORKDIR /app
 
+# ARMAZENAMENTO DOS ARQUIVOS (ortofotos, fotos, PDFs, anexos).
+#
+# Ficavam em ./uploads DENTRO do container: a cada deploy/restart o sistema de
+# arquivos é recriado e TUDO se perdia — ortofotos enviadas voltavam 404 e a
+# certidão já emitida sumia. O caminho passa a ser explícito e fora do código
+# da aplicação, para poder ser montado num volume persistente.
+#
+# NO EASYPANEL: crie um volume e monte em /app/storage. Sem isso, os arquivos
+# continuam sumindo a cada deploy — o VOLUME abaixo só declara a intenção.
+ENV STORAGE_LOCAL_DIR=/app/storage
+VOLUME ["/app/storage"]
+
 # Dependências (npm ci instala tudo, inclusive sequelize-cli p/ as migrations).
 # PUPPETEER_SKIP_DOWNLOAD acima evita o download do Chromium no postinstall.
 COPY package*.json ./

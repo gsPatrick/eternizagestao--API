@@ -28,7 +28,22 @@ try {
 } catch {
   // dep opcional ausente — segue sem hardening de headers
 }
-if (helmet) app.use(helmet());
+if (helmet) {
+  app.use(
+    helmet({
+      // Cross-Origin-Resource-Policy: o padrão do helmet é 'same-origin', que
+      // faz o NAVEGADOR bloquear qualquer recurso desta API embutido no front —
+      // que roda em outro domínio. O arquivo respondia 200 e mesmo assim a
+      // ortofoto não aparecia no mapa (ERR_BLOCKED_BY_RESPONSE.NotSameOrigin);
+      // curl não aplica a política, então o problema só existia no navegador.
+      //
+      // 'cross-origin' libera o EMBUTIMENTO. Não afrouxa o acesso: os arquivos
+      // continuam exigindo URL assinada (HMAC + expiração) ou sessão do tenant,
+      // exatamente como antes — ver o handler de storage.PUBLIC_PREFIX abaixo.
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+    })
+  );
+}
 
 let compression;
 try {

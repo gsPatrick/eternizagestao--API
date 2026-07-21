@@ -29,8 +29,15 @@ const update = catchAsync(async (req, res) => {
 });
 
 const remove = catchAsync(async (req, res) => {
-  await service.remove(getTenantId(req), req.params.id);
+  // ?force=true: o operador confirmou na tela, ciente do impacto listado.
+  const force = req.query.force === 'true' || req.query.force === true;
+  await service.remove(getTenantId(req), req.params.id, { force });
   return noContent(res);
+});
+
+// GET /v1/deceased/:id/delete-impact — o que a exclusão arrasta junto.
+const deleteImpact = catchAsync(async (req, res) => {
+  return ok(res, await service.deleteImpact(getTenantId(req), req.params.id));
 });
 
 // POST /v1/deceased/:id/photo — upload da foto (base64). Body: { contentBase64, fileName, mimeType }
@@ -47,4 +54,4 @@ const uploadDeathCertificate = catchAsync(async (req, res) => {
   return ok(res, await service.uploadDeathCertificate(getTenantId(req), req.params.id, data));
 });
 
-module.exports = { list, locationCounts, getById, create, update, remove, uploadPhoto, uploadDeathCertificate };
+module.exports = { list, locationCounts, getById, create, update, remove, deleteImpact, uploadPhoto, uploadDeathCertificate };

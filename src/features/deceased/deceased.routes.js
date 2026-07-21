@@ -18,6 +18,7 @@ router.post('/', write, controller.create);
 router.post('/:id/photo', write, controller.uploadPhoto);
 router.post('/:id/death-certificate', write, controller.uploadDeathCertificate);
 router.patch('/:id', write, controller.update);
+router.get('/:id/delete-impact', authorize('admin'), controller.deleteImpact);
 router.delete('/:id', authorize('admin'), controller.remove);
 
 module.exports = router;

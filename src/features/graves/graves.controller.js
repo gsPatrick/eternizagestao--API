@@ -55,8 +55,15 @@ const unblock = catchAsync(async (req, res) => {
 });
 
 const remove = catchAsync(async (req, res) => {
-  await service.remove(getTenantId(req), req.params.id);
+  // ?force=true: o operador confirmou na tela, ciente do impacto listado.
+  const force = req.query.force === 'true' || req.query.force === true;
+  await service.remove(getTenantId(req), req.params.id, { force, userId: getUserId(req) });
   return noContent(res);
+});
+
+// GET /v1/graves/:id/delete-impact — o que a exclusão arrasta junto.
+const deleteImpact = catchAsync(async (req, res) => {
+  return ok(res, await service.deleteImpact(getTenantId(req), req.params.id));
 });
 
 // POST /v1/graves/:id/photo — fotografia da sepultura (imagem base64).
@@ -66,4 +73,4 @@ const uploadPhoto = catchAsync(async (req, res) => {
   return ok(res, await service.uploadPhoto(getTenantId(req), req.params.id, data));
 });
 
-module.exports = { list, statusCounts, getById, summary, create, update, changeStatus, block, unblock, remove, uploadPhoto };
+module.exports = { list, statusCounts, getById, summary, create, update, changeStatus, block, unblock, remove, deleteImpact, uploadPhoto };

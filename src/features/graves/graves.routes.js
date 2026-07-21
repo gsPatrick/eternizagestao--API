@@ -21,6 +21,7 @@ router.post('/:id/photo', write, controller.uploadPhoto);
 router.patch('/:id/status', write, controller.changeStatus);
 router.patch('/:id/block', authorize('admin'), controller.block);
 router.patch('/:id/unblock', authorize('admin'), controller.unblock);
+router.get('/:id/delete-impact', authorize('admin'), controller.deleteImpact);
 router.delete('/:id', authorize('admin'), controller.remove);
 
 module.exports = router;

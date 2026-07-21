@@ -579,13 +579,84 @@ async function setBlocked(tenantId, id, { blocked, reason }, userId) {
   });
 }
 
-async function remove(tenantId, id) {
+/**
+ * IMPACTO da exclusão: o que está preso à sepultura e o que aconteceria com
+ * cada coisa. Serve para a tela mostrar ao operador, ANTES de confirmar,
+ * exatamente o que ele está prestes a arrastar junto — em vez de só barrar com
+ * uma mensagem seca ou apagar silenciosamente.
+ */
+async function deleteImpact(tenantId, id) {
   const grave = await getById(tenantId, id, { includes: [] });
-  const activeBurials = await Burial.count({ where: { graveId: id, status: 'ativo' } });
-  if (activeBurials > 0) {
+
+  const [activeBurials, occupants, activeConcessions, documents] = await Promise.all([
+    Burial.count({ where: { tenantId, graveId: id, status: 'ativo' } }),
+    Deceased.findAll({
+      where: { tenantId, currentGraveId: id },
+      attributes: ['id', 'fullName'],
+      raw: true,
+    }),
+    Concession.count({ where: { tenantId, graveId: id, status: 'ativa' } }),
+    Document.count({ where: { tenantId, graveId: id } }),
+  ]);
+
+  return {
+    code: grave.code,
+    blocked: activeBurials > 0,
+    activeBurials,
+    occupants: occupants.map((d) => d.fullName),
+    activeConcessions,
+    documents,
+  };
+}
+
+/**
+ * Exclusão da sepultura.
+ *
+ * Sem `force`, sepultura ocupada é barrada — é a regra que protege o operador
+ * de apagar um registro com corpo dentro. Com `force` (confirmação explícita na
+ * tela, listando o impacto), a exclusão prossegue e ARRASTA o que a bloqueava:
+ * os sepultamentos ativos são encerrados e os sepultados desvinculados; as
+ * concessões ativas são encerradas.
+ *
+ * O que NUNCA é apagado: os DOCUMENTOS já emitidos (certidão, autorização).
+ * São registro civil e continuam disponíveis em Documentos.
+ */
+async function remove(tenantId, id, { force = false, userId = null } = {}) {
+  const grave = await getById(tenantId, id, { includes: [] });
+  const activeBurials = await Burial.count({ where: { tenantId, graveId: id, status: 'ativo' } });
+
+  if (activeBurials > 0 && !force) {
     throw AppError.conflict('Sepultura possui sepultamentos ativos — não pode ser excluída.', 'GRAVE_OCCUPIED');
   }
-  await grave.destroy(); // soft delete
+
+  await sequelize.transaction(async (transaction) => {
+    if (force) {
+      await Burial.update(
+        { status: 'transladado' },
+        { where: { tenantId, graveId: id, status: 'ativo' }, transaction }
+      );
+      await Deceased.update(
+        { currentGraveId: null },
+        { where: { tenantId, currentGraveId: id }, transaction }
+      );
+      await Concession.update(
+        { status: 'encerrada' },
+        { where: { tenantId, graveId: id, status: 'ativa' }, transaction }
+      );
+    }
+    await grave.destroy({ transaction }); // soft delete
+  });
+
+  if (force) {
+    audit.record({
+      action: 'exclusao',
+      entityType: 'Sepultura',
+      entityId: id,
+      description: `Sepultura ${grave.code} excluída COM FORÇA: ${activeBurials} sepultamento(s) encerrado(s).`,
+      newData: { forcado: true, sepultamentosEncerrados: activeBurials },
+      userId,
+    });
+  }
 }
 
 /**
@@ -619,7 +690,8 @@ async function uploadPhoto(tenantId, id, { contentBase64, fileName, mimeType } =
 }
 
 module.exports = {
-  list, statusCounts, getById, summary, create, update, changeStatus, setBlocked, remove, uploadPhoto, EDITABLE_FIELDS,
+  list, statusCounts, getById, summary, create, update, changeStatus, setBlocked, remove, deleteImpact,
+  uploadPhoto, EDITABLE_FIELDS,
   // reaproveitados pelo backfill de certidões (mesma regra da emissão automática)
   ensurePerpetuityCertificate, isPerpetualUse,
 };

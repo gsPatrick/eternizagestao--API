@@ -5,7 +5,7 @@ const AppError = require('../../utils/app-error');
 const storage = require('../../providers/storage');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const {
-  sequelize, Deceased, Burial, Grave, GraveStatus, Lot, Street, Block, Cemetery,
+  sequelize, Deceased, Burial, Grave, GraveStatus, Lot, Street, Block, Cemetery, Document,
   Exhumation, RemainsDeposit, OssuaryNiche, Ossuary, Concession, Person,
 } = require('../../models');
 
@@ -245,14 +245,70 @@ async function update(tenantId, id, data) {
   return deceased.update(data);
 }
 
-async function remove(tenantId, id) {
+/**
+ * IMPACTO da exclusão: o que está preso ao sepultado. A tela usa isto para
+ * mostrar ao operador, ANTES de confirmar, exatamente o que ele vai arrastar
+ * junto — em vez de só barrar com uma mensagem seca.
+ */
+async function deleteImpact(tenantId, id) {
+  const deceased = await Deceased.findOne({
+    where: { id, tenantId },
+    include: [{ model: Grave, as: 'currentGrave', attributes: ['id', 'code'] }],
+  });
+  if (!deceased) throw AppError.notFound('Sepultado não encontrado.');
+
+  const [activeBurials, exhumations, deposits, documents] = await Promise.all([
+    Burial.count({ where: { tenantId, deceasedId: id, status: 'ativo' } }),
+    Exhumation.count({ where: { tenantId, deceasedId: id } }),
+    RemainsDeposit.count({ where: { tenantId, deceasedId: id, status: 'depositado' } }),
+    Document.count({ where: { tenantId, deceasedId: id } }),
+  ]);
+
+  return {
+    fullName: deceased.fullName,
+    blocked: activeBurials > 0,
+    activeBurials,
+    graveCode: deceased.currentGrave?.code || null,
+    exhumations,
+    deposits,
+    documents,
+  };
+}
+
+/**
+ * Exclusão do sepultado.
+ *
+ * Sem `force`, sepultado com sepultamento ativo é barrado — o correto é exumar.
+ * Com `force` (confirmação explícita na tela, listando o impacto), a exclusão
+ * prossegue e ARRASTA o que a bloqueava: o sepultamento ativo é encerrado, a
+ * sepultura é desocupada e o depósito no ossário é baixado.
+ *
+ * O que NUNCA é apagado: os DOCUMENTOS já emitidos (autorização, certidão) e o
+ * histórico de exumações. São registro civil e continuam consultáveis.
+ */
+async function remove(tenantId, id, { force = false } = {}) {
   const deceased = await Deceased.findOne({ where: { id, tenantId } });
   if (!deceased) throw AppError.notFound('Sepultado não encontrado.');
   const activeBurials = await Burial.count({ where: { tenantId, deceasedId: id, status: 'ativo' } });
-  if (activeBurials > 0) {
+
+  if (activeBurials > 0 && !force) {
     throw AppError.conflict('Sepultado possui sepultamento ativo — exume antes de excluir.', 'DECEASED_HAS_ACTIVE_BURIAL');
   }
-  await deceased.destroy(); // soft delete
+
+  await sequelize.transaction(async (transaction) => {
+    if (force) {
+      await Burial.update(
+        { status: 'transladado' },
+        { where: { tenantId, deceasedId: id, status: 'ativo' }, transaction }
+      );
+      await RemainsDeposit.update(
+        { status: 'retirado', removedAt: new Date(), removalReason: 'Sepultado excluído do cadastro.' },
+        { where: { tenantId, deceasedId: id, status: 'depositado' }, transaction }
+      );
+      await deceased.update({ currentGraveId: null }, { transaction });
+    }
+    await deceased.destroy({ transaction }); // soft delete
+  });
 }
 
 /**
@@ -323,5 +379,5 @@ async function uploadDeathCertificate(tenantId, id, { contentBase64, fileName, m
 
 module.exports = {
   list, locationCounts, getById, create, update, remove,
-  uploadPhoto, uploadDeathCertificate, EDITABLE_FIELDS,
+  deleteImpact, uploadPhoto, uploadDeathCertificate, EDITABLE_FIELDS,
 };

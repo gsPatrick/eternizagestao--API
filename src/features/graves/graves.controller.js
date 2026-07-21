@@ -37,7 +37,7 @@ const create = catchAsync(async (req, res) => {
 
 const update = catchAsync(async (req, res) => {
   const data = pick(req.body, service.EDITABLE_FIELDS);
-  return ok(res, await service.update(getTenantId(req), req.params.id, data));
+  return ok(res, await service.update(getTenantId(req), req.params.id, data, getUserId(req)));
 });
 
 const changeStatus = catchAsync(async (req, res) => {

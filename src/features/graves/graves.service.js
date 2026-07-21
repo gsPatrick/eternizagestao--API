@@ -8,8 +8,69 @@ const graveStatuses = require('../grave-statuses/grave-statuses.service');
 const audit = require('../audit-logs/audit.service');
 const {
   sequelize, Grave, GraveStatus, Lot, Street, Block, Cemetery,
-  Concession, Person, Burial, Deceased,
+  Concession, Person, Burial, Deceased, Document,
 } = require('../../models');
+
+/**
+ * "Perpétuo" tem ACENTO: /perpet/ NÃO casa com "perp-é-tuo" (quebra no `é`).
+ * Normalizamos os diacríticos antes de testar — senão a sepultura perpétua era
+ * tratada como temporária (concessão errada e certidão nunca emitida).
+ */
+function isPerpetualUse(value) {
+  return /perpet/i.test(
+    String(value == null ? '' : value).normalize('NFD').replace(/[̀-ͯ]/g, '')
+  );
+}
+
+/**
+ * Emite a CERTIDÃO DE PERPETUIDADE quando a sepultura é PERPÉTUA — inclusive
+ * SEM proprietário/concessão (o cliente marca a utilização como "Perpétuo" e
+ * espera a certidão disponível para download).
+ * IDEMPOTENTE: não reemite se o jazigo já tiver uma certidão.
+ */
+async function ensurePerpetuityCertificate(tenantId, grave, userId) {
+  if (!grave || !isPerpetualUse(grave.utilizacao)) return;
+
+  const existing = await Document.findOne({
+    where: { tenantId, graveId: grave.id, documentType: 'certidao_perpetuidade' },
+  });
+  if (existing) return; // já emitida (ex.: pela emissão da concessão)
+
+  // Concessão ativa (se houver) enriquece a certidão com o titular.
+  const concession = await Concession.findOne({
+    where: { tenantId, graveId: grave.id, status: 'ativa' },
+  });
+
+  const documents = require('../documents/documents.service');
+  await documents.issueFromRequest(
+    tenantId,
+    {
+      documentType: 'certidao_perpetuidade',
+      referenceType: concession ? 'concession' : 'grave',
+      referenceId: concession ? concession.id : grave.id,
+      graveId: grave.id,
+      personId: concession ? concession.personId : null,
+    },
+    userId
+  );
+}
+
+// Wrapper best-effort: nunca derruba o cadastro/edição da sepultura e deixa a
+// falha VISÍVEL na auditoria (o admin não tem acesso ao log do servidor).
+async function tryPerpetuityCertificate(tenantId, grave, userId) {
+  try {
+    await ensurePerpetuityCertificate(tenantId, grave, userId);
+  } catch (err) {
+    console.error('[graves] emissão da certidão de perpetuidade falhou:', err.message, err.stack);
+    audit.record({
+      action: 'emissao_documento',
+      entityType: 'Documento',
+      entityId: grave.id,
+      description: `FALHA ao emitir a Certidão de Perpetuidade: ${err.message}`,
+      newData: { erro: err.message, sepulturaId: grave.id },
+    });
+  }
+}
 
 const EDITABLE_FIELDS = [
   'code', 'unitType', 'capacity', 'geoPolygon', 'latitude', 'longitude',
@@ -361,7 +422,7 @@ async function create(tenantId, data, userId) {
   if (data.ownerPersonId) {
     try {
       const concessions = require('../concessions/concessions.service');
-      const isPerpetua = /perpet/i.test(String(data.utilizacao || ''));
+      const isPerpetua = isPerpetualUse(data.utilizacao);
       await concessions.issue(
         tenantId,
         grave.id,
@@ -377,12 +438,20 @@ async function create(tenantId, data, userId) {
     }
   }
 
+  // CERTIDÃO DE PERPETUIDADE: sai sempre que a utilização for "Perpétuo" —
+  // com ou sem proprietário. Idempotente (a emissão da concessão pode já ter
+  // gerado). Best-effort: não desfaz a sepultura criada.
+  await tryPerpetuityCertificate(tenantId, grave, userId);
+
   return grave;
 }
 
-async function update(tenantId, id, data) {
+async function update(tenantId, id, data, userId) {
   const grave = await getById(tenantId, id, { includes: [] });
-  return grave.update(data);
+  await grave.update(data);
+  // Passou a ser PERPÉTUA na edição → emite a certidão (se ainda não houver).
+  await tryPerpetuityCertificate(tenantId, grave, userId);
+  return grave;
 }
 
 // Mudança de status com registro obrigatório na timeline

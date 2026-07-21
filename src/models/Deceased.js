@@ -15,10 +15,17 @@ module.exports = (sequelize, DataTypes) => {
       deathDate: { type: DataTypes.DATEONLY },
       deathTime: { type: DataTypes.TIME },
       gender: { type: DataTypes.STRING(30) },
+      // Estado civil e Cor/raça (registro civil — campos do sistema antigo).
+      maritalStatus: { type: DataTypes.STRING(40) },
+      skinColor: { type: DataTypes.STRING(30) },
+      // Título de eleitor (documentação).
+      voterId: { type: DataTypes.STRING(30) },
       motherName: { type: DataTypes.STRING(150) },
       fatherName: { type: DataTypes.STRING(150) },
       birthplace: { type: DataTypes.STRING(150) },
       causeOfDeath: { type: DataTypes.STRING(255) },
+      // Local do falecimento (ex.: hospital, residência).
+      deathPlace: { type: DataTypes.STRING(200) },
       // Médico responsável pelo atestado de óbito (pedido do cliente).
       attendingPhysician: { type: DataTypes.STRING(150) },
       deathCertificateNumber: { type: DataTypes.STRING(60) },

@@ -37,6 +37,7 @@ const currentGraveInclude = {
 
 const EDITABLE_FIELDS = [
   'fullName', 'cpf', 'rg', 'birthDate', 'deathDate', 'deathTime', 'gender',
+  'maritalStatus', 'skinColor', 'voterId', 'deathPlace',
   'motherName', 'fatherName', 'birthplace', 'causeOfDeath', 'attendingPhysician',
   'deathCertificateNumber', 'deathCertificateRegistry', 'funeralHome', 'photoUrl', 'notes',
   'responsiblePersonId',

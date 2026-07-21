@@ -22,7 +22,10 @@ module.exports = (sequelize, DataTypes) => {
       // Médico responsável pelo atestado de óbito (pedido do cliente).
       attendingPhysician: { type: DataTypes.STRING(150) },
       deathCertificateNumber: { type: DataTypes.STRING(60) },
+      // Cartório de registro (nome) — escolhido de Básico › Cartórios.
       deathCertificateRegistry: { type: DataTypes.STRING(150) },
+      // Funerária responsável (nome) — escolhida de Básico › Funerárias.
+      funeralHome: { type: DataTypes.STRING(150) },
       // PDF da declaração/certidão de óbito anexada no cadastro.
       deathCertificateFileUrl: { type: DataTypes.STRING(500) },
       photoUrl: { type: DataTypes.STRING(500) },

@@ -38,7 +38,7 @@ const currentGraveInclude = {
 const EDITABLE_FIELDS = [
   'fullName', 'cpf', 'rg', 'birthDate', 'deathDate', 'deathTime', 'gender',
   'motherName', 'fatherName', 'birthplace', 'causeOfDeath', 'attendingPhysician',
-  'deathCertificateNumber', 'deathCertificateRegistry', 'photoUrl', 'notes',
+  'deathCertificateNumber', 'deathCertificateRegistry', 'funeralHome', 'photoUrl', 'notes',
 ];
 
 function buildListWhere(query) {

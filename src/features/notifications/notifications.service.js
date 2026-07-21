@@ -37,6 +37,7 @@ const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const whatsappProvider = require('../../providers/whatsapp');
 const { renderEmail } = require('../../emails/render');
 const { renderWhatsapp } = require('../../whatsapp/render');
+const { todayISO, hourInTZ, startOfTodayInTZ } = require('../../utils/date-local');
 const {
   enqueue,
   registerHandler,
@@ -119,14 +120,16 @@ async function integrationConfig(tenantId) {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+// TUDO no fuso de OPERAÇÃO. Antes isto misturava dois relógios: toDateOnly
+// usava UTC e startOfToday usava a hora do processo (que em produção é UTC).
+// A mistura fazia o corte de vencidos e o dedup "já avisei hoje?" caírem em
+// dias diferentes na janela das 21h–24h → avisos duplicados ou suprimidos.
 function toDateOnly(date) {
-  return new Date(date).toISOString().slice(0, 10); // YYYY-MM-DD
+  return todayISO(new Date(date)); // YYYY-MM-DD no fuso de operação
 }
 
 function startOfToday() {
-  const d = new Date();
-  d.setHours(0, 0, 0, 0);
-  return d;
+  return startOfTodayInTZ();
 }
 
 function templateFor(notificationType) {
@@ -622,7 +625,9 @@ async function tenantNotifyPrefs(tenantIds) {
 
 // Aplica silêncio/janela por cidade a uma lista de inputs de scan agendado.
 function applyTenantSchedule(inputs, prefs, now = new Date()) {
-  const currentHour = now.getHours();
+  // hora NO FUSO DE OPERAÇÃO: com getHours() num processo UTC, a cidade que
+  // configurou "09:00" nunca disparava (às 9h no Brasil o servidor marca 12).
+  const currentHour = hourInTZ(now);
   return inputs.filter((i) => {
     const p = prefs.get(i.tenantId);
     if (!p) return true; // cidade sem config → default global

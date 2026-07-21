@@ -26,4 +26,38 @@ function todayISO(date = new Date()) {
   return dateFmt.format(date);
 }
 
-module.exports = { todayISO, TZ };
+// Partes de data/hora do instante lido NO FUSO DE OPERAÇÃO.
+const partsFmt = new Intl.DateTimeFormat('en-US', {
+  timeZone: TZ,
+  hour12: false,
+  year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit',
+});
+function tzParts(date) {
+  const out = {};
+  for (const p of partsFmt.formatToParts(date)) {
+    if (p.type !== 'literal') out[p.type] = Number(p.value);
+  }
+  return out;
+}
+
+/** Offset do fuso de operação em MINUTOS (calculado, não fixo — à prova de DST). */
+function tzOffsetMinutes(date = new Date()) {
+  const p = tzParts(date);
+  const asUTC = Date.UTC(p.year, p.month - 1, p.day, p.hour % 24, p.minute, p.second);
+  return (asUTC - Math.floor(date.getTime() / 1000) * 1000) / 60000;
+}
+
+/** HORA do dia (0..23) no fuso de operação — o servidor roda em UTC. */
+function hourInTZ(date = new Date()) {
+  return tzParts(date).hour % 24;
+}
+
+/** Instante da MEIA-NOITE do dia corrente no fuso de operação. */
+function startOfTodayInTZ(date = new Date()) {
+  const [y, m, d] = todayISO(date).split('-').map(Number);
+  const offset = tzOffsetMinutes(date);
+  return new Date(Date.UTC(y, m - 1, d, 0, 0, 0) - offset * 60000);
+}
+
+module.exports = { todayISO, hourInTZ, startOfTodayInTZ, tzOffsetMinutes, TZ };

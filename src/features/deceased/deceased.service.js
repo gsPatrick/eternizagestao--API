@@ -39,6 +39,7 @@ const EDITABLE_FIELDS = [
   'fullName', 'cpf', 'rg', 'birthDate', 'deathDate', 'deathTime', 'gender',
   'motherName', 'fatherName', 'birthplace', 'causeOfDeath', 'attendingPhysician',
   'deathCertificateNumber', 'deathCertificateRegistry', 'funeralHome', 'photoUrl', 'notes',
+  'responsiblePersonId',
 ];
 
 function buildListWhere(query) {
@@ -114,7 +115,13 @@ async function attachResponsible(tenantId, rows) {
   for (const b of burialDates) lastBurialByDeceased.set(b.deceasedId, b.lastBurialDate);
 
   return rows.map((r) => {
-    const responsible = (r.currentGraveId && byGrave.get(r.currentGraveId)) || byDeceased.get(r.id) || null;
+    // Preferência: responsável EXPLÍCITO do sepultado → titular da concessão →
+    // declarante do último sepultamento.
+    const explicit = r.responsiblePerson
+      ? { id: r.responsiblePerson.id, name: r.responsiblePerson.fullName }
+      : null;
+    const responsible =
+      explicit || (r.currentGraveId && byGrave.get(r.currentGraveId)) || byDeceased.get(r.id) || null;
     const json = r.toJSON();
     // photoUrl / certidão de óbito assinados (só se locais /files/...).
     json.photoUrl = signPhoto(json.photoUrl);
@@ -155,7 +162,7 @@ async function list(tenantId, query) {
 
   const { rows, count } = await Deceased.findAndCountAll({
     where, limit, offset, order: [['fullName', 'ASC']],
-    include: [graveInc],
+    include: [graveInc, { model: Person, as: 'responsiblePerson', attributes: ['id', 'fullName'] }],
     distinct: true,
   });
   return { rows: await attachResponsible(tenantId, rows), meta: buildPageMeta(count, page, perPage) };
@@ -181,6 +188,7 @@ async function getById(tenantId, id) {
     where: { id, tenantId },
     include: [
       currentGraveInclude,
+      { model: Person, as: 'responsiblePerson', attributes: ['id', 'fullName'] },
       { model: Burial, as: 'burials', include: [{ model: Grave, as: 'grave' }] },
       // rastreabilidade: exumações e depósitos no ossário (de onde veio, onde está)
       {

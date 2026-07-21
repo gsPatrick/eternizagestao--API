@@ -162,6 +162,8 @@ ConcessionTransfer.belongsTo(User, { foreignKey: 'registeredByUserId', as: 'regi
 // ---------- Sepultados e sepultamentos ----------
 Grave.hasMany(Deceased, { foreignKey: 'currentGraveId', as: 'currentOccupants' });
 Deceased.belongsTo(Grave, { foreignKey: 'currentGraveId', as: 'currentGrave' });
+// Responsável explícito pelo sepultado (pessoa) — distinto do proprietário.
+Deceased.belongsTo(Person, { foreignKey: 'responsiblePersonId', as: 'responsiblePerson' });
 
 Grave.hasMany(Burial, { foreignKey: 'graveId', as: 'burials' });
 Burial.belongsTo(Grave, { foreignKey: 'graveId', as: 'grave' });

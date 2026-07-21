@@ -1,7 +1,7 @@
 'use strict';
 
 const AppError = require('../../utils/app-error');
-const { Burial, Concession } = require('../../models');
+const { Burial } = require('../../models');
 
 /**
  * Validações compartilhadas de "este jazigo pode receber um sepultamento?".
@@ -10,17 +10,19 @@ const { Burial, Concession } = require('../../models');
  *   1. bloqueio do jazigo (isBlocked)
  *   2. status que permite sepultamento (status.allowsBurial)
  *   3. lotação/capacidade (nº de sepultamentos ativos < capacity)
- *   4. concessão ativa (a menos que skipConcession)
  * Lança AppError 422 na primeira violação.
+ *
+ * IMPORTANTE: NÃO exige concessão ativa. Muitas sepulturas não têm o responsável
+ * localizado (posse é opcional no cadastro), então sepultar não pode depender de
+ * concessão. O param `skipConcession` é mantido só por compatibilidade de chamada.
  *
  * @param {object} params
  * @param {object} params.grave        instância de Grave já com `status` (GraveStatus) incluído
  * @param {string} params.tenantId
  * @param {object} [params.transaction] transação Sequelize em curso
- * @param {boolean} [params.skipConcession=false] pula a exigência de concessão ativa
  * @returns {Promise<{ activeBurials: number }>} contagem de sepultamentos ativos (antes deste)
  */
-async function assertGraveAcceptsBurial({ grave, tenantId, transaction, skipConcession = false } = {}) {
+async function assertGraveAcceptsBurial({ grave, tenantId, transaction } = {}) {
   if (!grave) throw AppError.notFound('Sepultura não encontrada.');
 
   if (grave.isBlocked) {
@@ -35,15 +37,6 @@ async function assertGraveAcceptsBurial({ grave, tenantId, transaction, skipConc
   });
   if (activeBurials >= grave.capacity) {
     throw new AppError('Sepultura sem capacidade disponível.', 422, 'GRAVE_FULL');
-  }
-
-  if (!skipConcession) {
-    const concession = await Concession.findOne({
-      where: { tenantId, graveId: grave.id, status: 'ativa' }, transaction,
-    });
-    if (!concession) {
-      throw new AppError('Sepultura sem concessão ativa.', 422, 'NO_ACTIVE_CONCESSION');
-    }
   }
 
   return { activeBurials };

@@ -24,8 +24,14 @@ const summary = catchAsync(async (req, res) => {
 });
 
 const create = catchAsync(async (req, res) => {
-  requireFields(req.body, ['lotId', 'code']);
-  const data = pick(req.body, ['lotId', 'parentGraveId', 'statusId', ...service.EDITABLE_FIELDS]);
+  // `code` é obrigatório; a LOCALIZAÇÃO pode vir por lotId (compat) OU por texto
+  // (cemeteryId + quadra/lote) — a validação do "onde" fica no service.
+  requireFields(req.body, ['code']);
+  const data = pick(req.body, [
+    'lotId', 'cemeteryId', 'block', 'street', 'lot',
+    'ownerPersonId', 'responsiblePersonId',
+    'parentGraveId', 'statusId', ...service.EDITABLE_FIELDS,
+  ]);
   return created(res, await service.create(getTenantId(req), data, getUserId(req)));
 });
 

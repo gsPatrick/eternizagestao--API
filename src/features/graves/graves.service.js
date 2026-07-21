@@ -228,10 +228,56 @@ async function summary(tenantId, id) {
   };
 }
 
+// Cadastro RÁPIDO: o operador digita QUADRA e LOTE (texto) em vez de escolher
+// numa cascata de selects. A estrutura Quadra→Rua→Lote é criada/reaproveitada
+// nos bastidores (find-or-create), então o mapa e os filtros continuam
+// funcionando. A "Rua" não aparece na UI simplificada → usamos uma rua padrão
+// por quadra ('GERAL'). Chaves únicas são por `code` dentro do pai.
+async function resolveLotFromText(tenantId, { cemeteryId, block, street, lot }, transaction) {
+  const cemetery = await Cemetery.findOne({ where: { id: cemeteryId, tenantId }, transaction });
+  if (!cemetery) throw AppError.notFound('Cemitério não encontrado.');
+
+  const blockCode = String(block == null ? '' : block).trim();
+  const lotCode = String(lot == null ? '' : lot).trim();
+  if (!blockCode) throw AppError.badRequest('Informe a quadra.', 'MISSING_BLOCK');
+  if (!lotCode) throw AppError.badRequest('Informe o lote.', 'MISSING_LOT');
+  const streetName = String(street == null ? '' : street).trim();
+  const streetCode = streetName || 'GERAL';
+
+  const [blockRow] = await Block.findOrCreate({
+    where: { tenantId, cemeteryId, code: blockCode },
+    defaults: { tenantId, cemeteryId, code: blockCode, name: blockCode },
+    transaction,
+  });
+  const [streetRow] = await Street.findOrCreate({
+    where: { tenantId, blockId: blockRow.id, code: streetCode },
+    defaults: { tenantId, cemeteryId, blockId: blockRow.id, code: streetCode, name: streetName || 'Geral' },
+    transaction,
+  });
+  const [lotRow] = await Lot.findOrCreate({
+    where: { tenantId, streetId: streetRow.id, code: lotCode },
+    defaults: { tenantId, cemeteryId, streetId: streetRow.id, code: lotCode, name: lotCode },
+    transaction,
+  });
+  return lotRow;
+}
+
 async function create(tenantId, data, userId) {
   return sequelize.transaction(async (transaction) => {
-    const lot = await Lot.findOne({ where: { id: data.lotId, tenantId }, transaction });
-    if (!lot) throw AppError.notFound('Lote não encontrado.');
+    // LOCAL: aceita `lotId` direto (compat) OU quadra/lote por TEXTO (cadastro rápido).
+    let lot;
+    if (data.lotId) {
+      lot = await Lot.findOne({ where: { id: data.lotId, tenantId }, transaction });
+      if (!lot) throw AppError.notFound('Lote não encontrado.');
+    } else if (data.cemeteryId && data.block && data.lot) {
+      lot = await resolveLotFromText(
+        tenantId,
+        { cemeteryId: data.cemeteryId, block: data.block, street: data.street, lot: data.lot },
+        transaction
+      );
+    } else {
+      throw AppError.badRequest('Informe o cemitério, a quadra e o lote.', 'MISSING_LOCATION');
+    }
 
     // gaveta precisa de um jazigo pai válido do mesmo tenant
     if (data.parentGraveId) {
@@ -246,6 +292,13 @@ async function create(tenantId, data, userId) {
       ? await graveStatuses.resolve(tenantId, { id: data.statusId })
       : await graveStatuses.resolve(tenantId, { slug: 'livre' });
 
+    // Só campos de coluna real entram no create (block/lot/quadra/ownerPersonId
+    // etc. são de entrada, não colunas de Grave).
+    const graveData = {};
+    for (const f of EDITABLE_FIELDS) {
+      if (data[f] !== undefined) graveData[f] = data[f];
+    }
+
     const grave = await Grave.create(
       {
         tenantId,
@@ -253,10 +306,32 @@ async function create(tenantId, data, userId) {
         lotId: lot.id,
         parentGraveId: data.parentGraveId || null,
         statusId: status.id,
-        ...data,
+        ...graveData,
       },
       { transaction }
     );
+
+    // PROPRIETÁRIO opcional → cria a concessão (posse inline; o menu Concessões
+    // saiu). Perpétua quando a utilização indicar perpetuidade; senão temporária.
+    if (data.ownerPersonId) {
+      const person = await Person.findOne({ where: { id: data.ownerPersonId, tenantId }, transaction });
+      if (!person) throw AppError.notFound('Proprietário não encontrado.');
+      const isPerpetua = /perpet/i.test(String(data.utilizacao || ''));
+      await Concession.create(
+        {
+          tenantId,
+          graveId: grave.id,
+          personId: person.id,
+          responsiblePersonId: data.responsiblePersonId || null,
+          concessionType: isPerpetua ? 'perpetua' : 'temporaria',
+          startDate: new Date(),
+          endDate: null,
+          status: 'ativa',
+          acquisitionMethod: 'emissao',
+        },
+        { transaction }
+      );
+    }
 
     await graveEvents.record(
       {

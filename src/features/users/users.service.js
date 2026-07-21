@@ -5,7 +5,7 @@ const AppError = require('../../utils/app-error');
 const { hashPassword, generateTempPassword } = require('../../utils/password');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const { panelLoginUrl } = require('../../utils/tenant-url');
-const { User, Tenant } = require('../../models');
+const { User, Tenant, Notification } = require('../../models');
 const notifications = require('../notifications/notifications.service');
 
 const TENANT_ROLES = ['admin', 'operador', 'consulta'];
@@ -25,9 +25,18 @@ async function panelLoginUrlFor(tenantId) {
 }
 
 // Enfileira (via camada de filas) o e-mail transacional de convite ao usuário.
+/**
+ * Envia o convite e EXIGE que ele tenha saído.
+ *
+ * `notifications.notify` nunca rejeita — ele persiste a falha na linha e volta.
+ * Isso é certo para disparos em lote, mas errado aqui: o convite carrega a
+ * SENHA TEMPORÁRIA. Se o e-mail não saiu, o usuário recém-criado não tem como
+ * entrar, e responder 201 faria o operador acreditar que convidou alguém.
+ * Então lemos o status persistido e transformamos em erro para quem chamou.
+ */
 async function sendInviteEmail(tenantId, user, actor = {}, tempPassword = null) {
   const ctaUrl = await panelLoginUrlFor(tenantId);
-  await notifications.notify({
+  const notification = await notifications.notify({
     tenantId,
     recipientUserId: user.id,
     contact: user.email,
@@ -47,6 +56,18 @@ async function sendInviteEmail(tenantId, user, actor = {}, tempPassword = null) 
     referenceType: 'user',
     referenceId: user.id,
   });
+
+  // O objeto em memória ainda tem o status da CRIAÇÃO ('pendente'); o status
+  // definitivo é gravado pelo dispatch. Por isso relemos sempre antes de julgar.
+  if (notification) await notification.reload().catch(() => {});
+  if (notification && notification.status === 'falha') {
+    throw new AppError(
+      notification.errorMessage
+        || 'Não foi possível enviar o convite: o e-mail não está configurado.',
+      503,
+      'EMAIL_NOT_CONFIGURED'
+    );
+  }
 }
 
 async function list(tenantId, query) {
@@ -148,7 +169,28 @@ async function invite(tenantId, data, actor = {}) {
     tenantId, name: data.name, email, phone: data.phone ?? null, passwordHash, role,
     mustChangePassword: true, // troca a senha temporária no 1º acesso
   });
-  await sendInviteEmail(tenantId, user, actor, tempPassword);
+  // Se o convite não sai, o usuário criado é lixo: ninguém conhece a senha
+  // temporária e o e-mail fica preso no índice unique, impedindo reconvite.
+  // Desfazemos a criação para o operador poder tentar de novo depois de
+  // configurar o e-mail — sem sobra e sem "usuário fantasma" na listagem.
+  try {
+    await sendInviteEmail(tenantId, user, actor, tempPassword);
+  } catch (err) {
+    // A própria notificação de falha aponta para o usuário (FK), então ela
+    // precisa soltar a referência antes — senão o rollback falha em silêncio e
+    // sobra o cadastro órfão que estávamos tentando evitar. A linha da
+    // notificação PERMANECE: é o registro de que a tentativa existiu.
+    try {
+      await Notification.update(
+        { recipientUserId: null },
+        { where: { tenantId, recipientUserId: user.id } }
+      );
+      await user.destroy({ force: true });
+    } catch (cleanupErr) {
+      console.error('[users] falha ao desfazer o convite:', cleanupErr.message);
+    }
+    throw err;
+  }
   return getById(tenantId, user.id); // recarrega sem passwordHash
 }
 

@@ -116,10 +116,13 @@ function serializeAdmin(user) {
 
 // Enfileira (via camada de filas/notifications) o e-mail de convite ao primeiro
 // admin da cidade — reutiliza o template 'user-invite' já usado no convite de
-// usuários da equipe. Nunca lança pro fluxo (best-effort é responsabilidade do
-// chamador); aqui só monta e chama notify.
+// usuários da equipe.
+//
+// LANÇA quando o envio falhou: `notify` persiste a falha e volta sem rejeitar
+// (certo para lote), mas aqui o e-mail carrega a SENHA TEMPORÁRIA do primeiro
+// acesso. Sem ele a cidade nasce inacessível, e quem chamou precisa saber.
 async function sendAdminInvite(tenant, user, actor = {}, tempPassword = null) {
-  await notifications.notify({
+  const notification = await notifications.notify({
     tenantId: tenant.id,
     // Disparo da PLATAFORMA (super_admin criando a cidade) → marca AZUL (Eterniza)
     // + remetente da plataforma (Resend), NÃO a cor da cidade.
@@ -144,6 +147,17 @@ async function sendAdminInvite(tenant, user, actor = {}, tempPassword = null) {
     referenceType: 'user',
     referenceId: user.id,
   });
+
+  // O objeto em memória traz o status da CRIAÇÃO; o definitivo vem do dispatch.
+  if (notification) await notification.reload().catch(() => {});
+  if (notification && notification.status === 'falha') {
+    throw new AppError(
+      notification.errorMessage
+        || 'Não foi possível enviar o convite ao administrador da cidade.',
+      503,
+      'EMAIL_NOT_CONFIGURED'
+    );
+  }
 }
 
 async function list(query) {
@@ -257,11 +271,18 @@ async function create(payload = {}, actor = {}) {
     throw err;
   }
 
-  // Após o COMMIT: enfileira o convite ao primeiro admin (best-effort — uma
-  // falha de e-mail não desfaz a cidade já criada). Leva a senha temporária.
+  // Após o COMMIT: convite ao primeiro admin. Continua best-effort — derrubar
+  // a cidade já criada por causa do e-mail seria pior. Mas o resultado PRECISA
+  // subir para quem chamou: sem o convite, o admin não conhece a senha
+  // temporária e a cidade nasce inacessível. Antes isso morria num console.error
+  // e a tela dizia "cidade criada" como se estivesse tudo certo.
+  const adminInvite = { sent: true, code: null, message: null };
   try {
     await sendAdminInvite(tenant, user, actor, tempPassword);
   } catch (err) {
+    adminInvite.sent = false;
+    adminInvite.code = err.code || 'INVITE_FAILED';
+    adminInvite.message = err.message;
     console.error('[tenants] convite ao primeiro admin falhou:', err.message);
   }
 
@@ -269,6 +290,7 @@ async function create(payload = {}, actor = {}) {
     tenant: serialize(tenant),
     admin: serializeAdmin(user),
     domain: computeDomain(subdomain),
+    adminInvite,
   };
 }
 

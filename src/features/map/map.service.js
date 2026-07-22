@@ -32,6 +32,28 @@ async function listOrthophotos(tenantId, cemeteryId) {
 }
 
 // Valida o shape de corners { tl,tr,br,bl } com cada canto = [lat, lng].
+/**
+ * Ortofoto a EXIBIR no mapa.
+ *
+ * Não basta pegar a ativa: subir uma ortofoto nova a marca como ativa e desativa
+ * a anterior, mas ela nasce SEM CANTOS — e sem cantos não há como desenhá-la.
+ * O resultado era todo mapa (detalhe da sepultura, do sepultado e o público)
+ * ficar cego assim que alguém subia um arquivo novo, mesmo havendo uma ortofoto
+ * já posicionada e perfeitamente utilizável.
+ *
+ * Regra: a ativa POSICIONADA manda; na falta dela, a posicionada mais recente;
+ * só então a ativa sem posição (para a tela saber que existe algo a posicionar).
+ */
+async function pickDisplayOrthophoto(tenantId, cemeteryId, extra = {}) {
+  const todas = await Orthophoto.findAll({
+    where: { tenantId, cemeteryId },
+    order: [['isActive', 'DESC'], ['createdAt', 'DESC']],
+    ...extra,
+  });
+  const comCantos = todas.filter((o) => o.corners);
+  return comCantos.find((o) => o.isActive) || comCantos[0] || todas[0] || null;
+}
+
 function assertCorners(corners) {
   if (corners == null) return;
   const keys = ['tl', 'tr', 'br', 'bl'];
@@ -153,10 +175,7 @@ async function getMapContext(tenantId, cemeteryId) {
   // O painel alterna essas camadas sobre a ortofoto; só as com geoPolygon são
   // desenháveis, mas devolvemos todas (o front ignora as sem geometria).
   const [active, blocks, streets, lots] = await Promise.all([
-    Orthophoto.findOne({
-      where: { tenantId, cemeteryId, isActive: true },
-      order: [['createdAt', 'DESC']],
-    }),
+    pickDisplayOrthophoto(tenantId, cemeteryId),
     Block.findAll({ where: { tenantId, cemeteryId }, attributes: ['id', 'code', 'name', 'geoPolygon'] }),
     Street.findAll({ where: { tenantId, cemeteryId }, attributes: ['id', 'code', 'name', 'geoPolygon'] }),
     Lot.findAll({ where: { tenantId, cemeteryId }, attributes: ['id', 'code', 'geoPolygon'] }),

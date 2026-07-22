@@ -18,9 +18,16 @@ async function cemeteryMap(tenantId, cemeteryId) {
   if (!cemetery) throw AppError.notFound('Cemitério não encontrado.');
 
   const [orthophoto, blocks, streets, lots, graves] = await Promise.all([
-    Orthophoto.findOne({
-      where: { tenantId, cemeteryId, isActive: true },
-      attributes: ['id', 'fileUrl', 'bounds', 'widthPx', 'heightPx', 'corners', 'opacity'],
+    // A ortofoto ATIVA pode ser um envio recente ainda sem posição; sem cantos
+    // não há o que desenhar. Preferimos sempre uma POSICIONADA — senão o mapa
+    // público ficava sem imagem só porque alguém subiu um arquivo novo.
+    Orthophoto.findAll({
+      where: { tenantId, cemeteryId },
+      attributes: ['id', 'fileUrl', 'bounds', 'widthPx', 'heightPx', 'corners', 'opacity', 'isActive'],
+      order: [['isActive', 'DESC'], ['createdAt', 'DESC']],
+    }).then((lista) => {
+      const comCantos = lista.filter((o) => o.corners);
+      return comCantos.find((o) => o.isActive) || comCantos[0] || lista[0] || null;
     }),
     Block.findAll({ where: { tenantId, cemeteryId }, attributes: ['id', 'code', 'name', 'geoPolygon'] }),
     Street.findAll({ where: { tenantId, cemeteryId }, attributes: ['id', 'code', 'name', 'geoPolygon'] }),

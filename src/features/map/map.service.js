@@ -2,6 +2,8 @@
 
 const AppError = require('../../utils/app-error');
 const storage = require('../../providers/storage');
+const { readGeoreference, isTiff } = require('../../utils/geotiff');
+const { rasterToWebImage } = require('../../utils/raster-to-web');
 const { Cemetery, Orthophoto, MapPath, Grave, Block, Street, Lot } = require('../../models');
 
 // TTL longo (7 dias) para a URL assinada da ortofoto: é branding/mapa exibido via
@@ -65,13 +67,33 @@ async function uploadOrthophoto(tenantId, cemeteryId, data) {
   assertCorners(data.corners);
   assertOpacity(data.opacity);
   let fileUrl = data.fileUrl;
+
+  // Campos que o GeoTIFF preenche sozinho (quando for um GeoTIFF).
+  let geo = null;
+
   if (data.content || data.contentBase64) {
+    let content = data.content
+      || (data.contentBase64 ? Buffer.from(data.contentBase64, 'base64') : null);
+    let fileName = data.fileName || 'ortofoto.png';
+    let mimeType = data.mimeType || 'image/png';
+
+    // GEOTIFF: o ortomosaico do drone já sabe onde fica no mundo. Lendo isso, a
+    // ortofoto nasce posicionada — sem ninguém encaixar a foto no mapa à mão,
+    // e com a precisão da própria aerofotogrametria. Mas nenhum navegador
+    // exibe TIFF, então convertemos a imagem para web e guardamos a convertida.
+    if (content && isTiff(content)) {
+      geo = readGeoreference(content);
+      const web = await rasterToWebImage(content, geo || {});
+      content = web.content;
+      mimeType = web.mimeType;
+      fileName = `${String(fileName).replace(/\.[^.]+$/, '')}.webp`;
+    }
+
     const saved = await storage.saveFile({
       tenantId,
-      fileName: data.fileName || 'ortofoto.png',
-      content: data.content, // Buffer (upload binário) — sem inchaço do base64
-      contentBase64: data.contentBase64, // compat (seed/integrações)
-      mimeType: data.mimeType || 'image/png',
+      fileName,
+      content, // Buffer (upload binário) — sem inchaço do base64
+      mimeType,
     });
     fileUrl = saved.fileUrl;
   }
@@ -81,11 +103,13 @@ async function uploadOrthophoto(tenantId, cemeteryId, data) {
     tenantId, cemeteryId, fileUrl,
     name: data.name,
     bounds: data.bounds,
-    corners: data.corners,
+    // O que veio do arquivo tem prioridade sobre o que veio da requisição: a
+    // georreferência do GeoTIFF é medida, não estimada.
+    corners: (geo && geo.corners) || data.corners,
     opacity: data.opacity,
-    widthPx: data.widthPx,
-    heightPx: data.heightPx,
-    resolutionCmPx: data.resolutionCmPx,
+    widthPx: (geo && geo.widthPx) || data.widthPx,
+    heightPx: (geo && geo.heightPx) || data.heightPx,
+    resolutionCmPx: (geo && geo.resolutionCmPx) || data.resolutionCmPx,
     capturedAt: data.capturedAt,
   });
 

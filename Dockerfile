@@ -3,12 +3,16 @@ FROM node:20-bookworm-slim
 
 # Chromium (Puppeteer renderiza os documentos oficiais em PDF) + fontes/certs.
 # Instalamos o Chromium do sistema e dizemos ao Puppeteer para usá-lo (sem baixar).
+# gdal-bin: converte o GeoTIFF do drone para uma imagem que o navegador exibe.
+# O libvips (sharp) não decodifica ortomosaico com JPEG de 4 canais dentro do
+# TIFF — que é o formato que o próprio GDAL gera e o cliente nos envia.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       chromium \
       fonts-liberation \
       fonts-noto-core \
       ca-certificates \
+      gdal-bin \
  && rm -rf /var/lib/apt/lists/*
 
 ENV PUPPETEER_SKIP_DOWNLOAD=true \

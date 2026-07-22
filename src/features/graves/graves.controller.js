@@ -37,7 +37,11 @@ const create = catchAsync(async (req, res) => {
 });
 
 const update = catchAsync(async (req, res) => {
-  const data = pick(req.body, service.EDITABLE_FIELDS);
+  // Aceita também a LOCALIZAÇÃO (cemitério/quadra/rua/lote): corrigir um
+  // cadastro errado não pode exigir apagar e recriar a sepultura.
+  const data = pick(req.body, [
+    ...service.EDITABLE_FIELDS, 'cemeteryId', 'block', 'street', 'lot',
+  ]);
   return ok(res, await service.update(getTenantId(req), req.params.id, data, getUserId(req)));
 });
 

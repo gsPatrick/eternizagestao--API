@@ -516,7 +516,27 @@ async function create(tenantId, data, userId) {
 
 async function update(tenantId, id, data, userId) {
   const grave = await getById(tenantId, id, { includes: [] });
-  await grave.update(data);
+
+  // RELOCAÇÃO: cemitério/quadra/lote deixaram de ser imutáveis. Só se corrigia
+  // erro de cadastro apagando e recriando a sepultura — o que levava junto o
+  // histórico, os documentos e a demarcação no mapa. A estrutura de destino é
+  // criada se não existir, mesma regra do cadastro.
+  if (data.cemeteryId || data.block || data.lot || data.street) {
+    const lot = await resolveLotFromText(tenantId, {
+      cemeteryId: data.cemeteryId || grave.cemeteryId,
+      block: data.block,
+      street: data.street,
+      lot: data.lot,
+    });
+    data.lotId = lot.id;
+    data.cemeteryId = lot.cemeteryId;
+  }
+
+  const campos = {};
+  for (const f of [...EDITABLE_FIELDS, 'lotId', 'cemeteryId']) {
+    if (data[f] !== undefined) campos[f] = data[f];
+  }
+  await grave.update(campos);
   // Passou a ser PERPÉTUA na edição → emite a certidão (se ainda não houver).
   await tryPerpetuityCertificate(tenantId, grave, userId);
   return grave;

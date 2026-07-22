@@ -25,7 +25,10 @@ const create = catchAsync(async (req, res) => {
 });
 
 const update = catchAsync(async (req, res) => {
-  return ok(res, await service.update(getTenantId(req), req.params.id, pick(req.body, service.EDITABLE_FIELDS)));
+  // Aceita também sepultura e data de sepultamento: para o operador são dados
+  // do sepultado, ainda que morem no registro de sepultamento.
+  const data = pick(req.body, [...service.EDITABLE_FIELDS, ...service.BURIAL_FIELDS]);
+  return ok(res, await service.update(getTenantId(req), req.params.id, data));
 });
 
 const remove = catchAsync(async (req, res) => {

@@ -45,6 +45,11 @@ const EDITABLE_FIELDS = [
   'responsiblePersonId',
 ];
 
+// Campos que NÃO são coluna do sepultado, mas que a edição passa a aceitar por
+// serem o que o operador enxerga como "dados dele": a sepultura onde está e a
+// data em que foi sepultado vivem no registro de sepultamento.
+const BURIAL_FIELDS = ['currentGraveId', 'burialDate', 'burialTime'];
+
 function buildListWhere(query) {
   const where = {};
   if (query.search) {
@@ -242,7 +247,49 @@ async function create(tenantId, data) {
 async function update(tenantId, id, data) {
   const deceased = await Deceased.findOne({ where: { id, tenantId } });
   if (!deceased) throw AppError.notFound('Sepultado não encontrado.');
-  return deceased.update(data);
+
+  const campos = {};
+  for (const f of EDITABLE_FIELDS) if (data[f] !== undefined) campos[f] = data[f];
+
+  // SEPULTURA e DATA DE SEPULTAMENTO: para o operador são "dados do sepultado",
+  // mas moram no registro de sepultamento. Antes só mudavam pelos fluxos de
+  // sepultamento/exumação, então um erro de digitação obrigava a exumar e
+  // sepultar de novo — inventando eventos que nunca aconteceram, o que é pior
+  // para o histórico do que permitir a correção.
+  const novaSepultura = data.currentGraveId !== undefined
+    && data.currentGraveId !== deceased.currentGraveId;
+
+  await sequelize.transaction(async (transaction) => {
+    if (novaSepultura) {
+      if (data.currentGraveId) {
+        const grave = await Grave.findOne({
+          where: { id: data.currentGraveId, tenantId }, transaction,
+        });
+        if (!grave) throw AppError.notFound('Sepultura informada não encontrada.');
+        campos.currentLocationType = 'sepultado';
+      } else {
+        campos.currentLocationType = deceased.currentLocationType;
+      }
+      campos.currentGraveId = data.currentGraveId || null;
+    }
+
+    await deceased.update(campos, { transaction });
+
+    // O sepultamento ativo acompanha a correção — senão a listagem mostraria
+    // uma sepultura e o histórico outra.
+    const patchBurial = {};
+    if (novaSepultura && data.currentGraveId) patchBurial.graveId = data.currentGraveId;
+    if (data.burialDate !== undefined) patchBurial.burialDate = data.burialDate;
+    if (data.burialTime !== undefined) patchBurial.burialTime = data.burialTime || null;
+    if (Object.keys(patchBurial).length) {
+      await Burial.update(patchBurial, {
+        where: { tenantId, deceasedId: id, status: 'ativo' },
+        transaction,
+      });
+    }
+  });
+
+  return deceased.reload();
 }
 
 /**
@@ -379,5 +426,5 @@ async function uploadDeathCertificate(tenantId, id, { contentBase64, fileName, m
 
 module.exports = {
   list, locationCounts, getById, create, update, remove,
-  deleteImpact, uploadPhoto, uploadDeathCertificate, EDITABLE_FIELDS,
+  deleteImpact, uploadPhoto, uploadDeathCertificate, EDITABLE_FIELDS, BURIAL_FIELDS,
 };

@@ -235,6 +235,9 @@ if (require.main === module) {
   applyMigrations().finally(() => {
     server = app.listen(port, async () => {
       console.log(`Eterniza Gestão API ouvindo na porta ${port} (prefixo ${apiPrefix})`);
+      // Onde os arquivos são gravados e se aquilo persiste — a falha aqui é
+      // silenciosa e só aparece no deploy seguinte, com tudo em 404.
+      storage.logStorageDiagnostics();
       try {
         await sequelize.authenticate();
         console.log('Conexão com o PostgreSQL estabelecida.');

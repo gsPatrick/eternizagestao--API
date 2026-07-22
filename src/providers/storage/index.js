@@ -18,6 +18,46 @@ const path = require('path');
 const crypto = require('crypto');
 
 const LOCAL_DIR = path.resolve(process.env.STORAGE_LOCAL_DIR || 'uploads');
+
+/**
+ * Diagnóstico do armazenamento, avaliado no boot.
+ *
+ * Existe porque a falha mais cara aqui é SILENCIOSA: se a API grava num caminho
+ * que não é o volume persistente, tudo funciona — até o próximo deploy, quando
+ * ortofotos, fotos e PDFs somem e voltam 404. Nada no sistema denuncia isso.
+ * Agora o log do boot diz onde os arquivos vão parar e se aquilo sobrevive a um
+ * restart, para a conferência ser uma linha de log em vez de investigação.
+ */
+function describeStorage() {
+  const usandoPadrao = !process.env.STORAGE_LOCAL_DIR;
+  let gravavel = false;
+  try {
+    fs.mkdirSync(LOCAL_DIR, { recursive: true });
+    const teste = path.join(LOCAL_DIR, '.write-test');
+    fs.writeFileSync(teste, 'ok');
+    fs.unlinkSync(teste);
+    gravavel = true;
+  } catch {
+    gravavel = false;
+  }
+  return { dir: LOCAL_DIR, usandoPadrao, gravavel };
+}
+
+function logStorageDiagnostics() {
+  const d = describeStorage();
+  console.log(`[storage] arquivos em: ${d.dir} (gravável: ${d.gravavel ? 'sim' : 'NÃO'})`);
+  if (d.usandoPadrao) {
+    console.warn(
+      '[storage] ATENÇÃO: STORAGE_LOCAL_DIR não definida — usando o caminho padrão '
+      + 'dentro do container. Se este caminho NÃO for um volume persistente, todos os '
+      + 'arquivos (ortofotos, fotos, PDFs) serão PERDIDOS no próximo deploy. '
+      + 'No EasyPanel: defina STORAGE_LOCAL_DIR=/app/storage e monte um volume nesse caminho.'
+    );
+  }
+  if (!d.gravavel) {
+    console.error(`[storage] ERRO: sem permissão de escrita em ${d.dir} — uploads vão falhar.`);
+  }
+}
 const PUBLIC_PREFIX = '/files'; // prefixo da rota autenticada de leitura (app.js)
 
 // Segredo do HMAC das URLs assinadas. Em produção cai no JWT_SECRET (obrigatório
@@ -134,6 +174,8 @@ function readLocalFile(fileUrl) {
 }
 
 module.exports = {
+  describeStorage,
+  logStorageDiagnostics,
   ...driver,
   LOCAL_DIR,
   PUBLIC_PREFIX,

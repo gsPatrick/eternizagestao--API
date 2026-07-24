@@ -231,6 +231,29 @@ if (require.main === module) {
     }
   }
 
+  // BACKFILL da AGENDA: cria os eventos que faltam a partir dos sepultamentos
+  // já cadastrados (a criação automática passou a existir agora). Diferente do
+  // de certidões, este NÃO emite documento oficial nem é caro — só popula a
+  // agenda com o que já existe, para o portal refletir a realidade — então roda
+  // por padrão. Idempotente; desligável com BURIAL_AGENDA_BACKFILL=false.
+  async function runBurialAgendaBackfill() {
+    if (process.env.BURIAL_AGENDA_BACKFILL === 'false') return;
+    try {
+      const { backfillBurialSchedules } = require('./src/features/schedules/backfill-burial-schedules');
+      const r = await backfillBurialSchedules();
+      if (r.candidatos) {
+        console.log(
+          `[boot] agenda: ${r.criados} evento(s) de sepultamento sincronizado(s), `
+          + `${r.falhas} falha(s) de ${r.candidatos} candidato(s).`
+        );
+      } else {
+        console.log('[boot] agenda: nada a sincronizar (sem sepultamentos futuros).');
+      }
+    } catch (err) {
+      console.error('[boot] backfill da agenda falhou:', err.message);
+    }
+  }
+
   let server;
   applyMigrations().finally(() => {
     server = app.listen(port, async () => {
@@ -246,6 +269,7 @@ if (require.main === module) {
       }
       // fora do caminho crítico: a API já está no ar quando isto começa
       runPerpetuityBackfill();
+      runBurialAgendaBackfill();
     });
   });
 

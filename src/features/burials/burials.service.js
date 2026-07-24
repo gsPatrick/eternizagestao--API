@@ -300,4 +300,4 @@ async function getById(tenantId, id) {
   return enriched;
 }
 
-module.exports = { create, list, stats, getById, CREATE_FIELDS };
+module.exports = { create, list, stats, getById, ensureBurialSchedule, CREATE_FIELDS };

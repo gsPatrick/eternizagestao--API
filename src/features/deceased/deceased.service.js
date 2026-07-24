@@ -4,8 +4,9 @@ const { Op } = require('sequelize');
 const AppError = require('../../utils/app-error');
 const storage = require('../../providers/storage');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
+const { combineLocalDateTime } = require('../../utils/date-local');
 const {
-  sequelize, Deceased, Burial, Grave, GraveStatus, Lot, Street, Block, Cemetery, Document,
+  sequelize, Deceased, Burial, Grave, GraveStatus, Lot, Street, Block, Cemetery, Document, Schedule,
   Exhumation, RemainsDeposit, OssuaryNiche, Ossuary, Concession, Person,
 } = require('../../models');
 
@@ -288,6 +289,23 @@ async function update(tenantId, id, data) {
       });
     }
   });
+
+  // Editar a data/hora/sepultura do sepultado precisa refletir na agenda —
+  // senão o portal continuaria anunciando o horário antigo. Best-effort, fora
+  // da transação principal.
+  if (data.burialDate !== undefined || data.burialTime !== undefined || novaSepultura) {
+    const ativo = await Burial.findOne({ where: { tenantId, deceasedId: id, status: 'ativo' } });
+    if (ativo && ativo.burialDate) {
+      const startsAt = combineLocalDateTime(ativo.burialDate, ativo.burialTime || '09:00');
+      if (startsAt) {
+        const endsAt = new Date(startsAt.getTime() + 60 * 60000);
+        const evento = await Schedule.findOne({
+          where: { tenantId, scheduleType: 'sepultamento', deceasedId: id },
+        });
+        if (evento) await evento.update({ startsAt, endsAt, graveId: ativo.graveId });
+      }
+    }
+  }
 
   return deceased.reload();
 }

@@ -10,8 +10,9 @@ const audit = require('../audit-logs/audit.service');
 const storage = require('../../providers/storage');
 const { assertGraveAcceptsBurial } = require('./burials.helper');
 const {
-  sequelize, Burial, Grave, GraveStatus, Deceased, Person, Document,
+  sequelize, Burial, Grave, GraveStatus, Deceased, Person, Document, Schedule,
 } = require('../../models');
+const { combineLocalDateTime } = require('../../utils/date-local');
 
 const CREATE_FIELDS = [
   'graveId', 'deceasedId', 'burialDate', 'burialTime', 'declarantPersonId',
@@ -165,8 +166,48 @@ async function create(tenantId, data, userId, { force, role, autoAuthorize = tru
     }
   }
 
+  // AGENDA AUTOMÁTICA: cadastrar o sepultado com data/hora já cria o evento na
+  // agenda — interna e pública — sem o operador redigitar. É o gatilho pedido
+  // pelo cliente. Best-effort: uma falha aqui não desfaz o sepultamento.
+  await ensureBurialSchedule(tenantId, burial, userId).catch((err) => {
+    console.error('[burials] criação do evento de agenda falhou:', err.message);
+  });
+
   const [enriched] = await attachAuthorizationDocuments(tenantId, [burial]);
   return enriched;
+}
+
+/**
+ * Cria (ou atualiza) o evento de agenda do sepultamento.
+ *
+ * O horário é montado no FUSO DE OPERAÇÃO: o operador digita "16:10" pensando no
+ * horário do cemitério, e o container roda em UTC — sem a conversão explícita o
+ * mesmo horário sairia deslocado no portal. Idempotente por sepultamento: um
+ * segundo save não duplica o evento, só atualiza.
+ */
+async function ensureBurialSchedule(tenantId, burial, userId) {
+  if (!burial.burialDate) return null;
+  const startsAt = combineLocalDateTime(burial.burialDate, burial.burialTime || '09:00');
+  if (!startsAt) return null;
+  const endsAt = new Date(startsAt.getTime() + 60 * 60000); // 1h padrão
+
+  const existing = await Schedule.findOne({
+    where: { tenantId, scheduleType: 'sepultamento', graveId: burial.graveId, deceasedId: burial.deceasedId },
+  });
+  if (existing) {
+    return existing.update({ startsAt, endsAt });
+  }
+  return Schedule.create({
+    tenantId,
+    cemeteryId: burial.cemeteryId,
+    graveId: burial.graveId,
+    deceasedId: burial.deceasedId,
+    scheduleType: 'sepultamento',
+    startsAt,
+    endsAt,
+    status: 'agendado',
+    createdByUserId: userId,
+  });
 }
 
 async function list(tenantId, query) {

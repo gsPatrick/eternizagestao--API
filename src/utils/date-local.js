@@ -60,4 +60,25 @@ function startOfTodayInTZ(date = new Date()) {
   return new Date(Date.UTC(y, m - 1, d, 0, 0, 0) - offset * 60000);
 }
 
-module.exports = { todayISO, hourInTZ, startOfTodayInTZ, tzOffsetMinutes, TZ };
+/**
+ * Combina uma DATA ("YYYY-MM-DD") e uma HORA ("HH:MM") do FUSO DE OPERAÇÃO num
+ * instante UTC (Date). Usado para transformar a data+hora do sepultamento — que
+ * o operador digita no horário local do cemitério — no `startsAt` da agenda.
+ *
+ * O container roda em UTC, então "16:10" precisa saber que é 16:10 em
+ * America/Sao_Paulo (hoje -03, DST-safe via tzOffsetMinutes) antes de virar
+ * 19:10Z. Sem isso, o mesmo horário apareceria deslocado no portal.
+ */
+function combineLocalDateTime(dateISO, timeHHMM = '00:00') {
+  if (!dateISO) return null;
+  const [y, m, d] = String(dateISO).slice(0, 10).split('-').map(Number);
+  const [hh, mm] = String(timeHHMM || '00:00').slice(0, 5).split(':').map(Number);
+  if (!y || !m || !d) return null;
+  // Estimativa UTC ingênua e o offset AVALIADO NAQUELE INSTANTE (cobre a rara
+  // virada de DST entre a data e "agora").
+  const naive = Date.UTC(y, m - 1, d, hh || 0, mm || 0, 0);
+  const offset = tzOffsetMinutes(new Date(naive));
+  return new Date(naive - offset * 60000);
+}
+
+module.exports = { todayISO, hourInTZ, startOfTodayInTZ, tzOffsetMinutes, combineLocalDateTime, TZ };

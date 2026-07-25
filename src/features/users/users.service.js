@@ -29,6 +29,9 @@ const ROLE_INCLUDE = [
  * @returns {object} patch parcial { role?, roleId? } a aplicar no create/update
  */
 async function resolveRoleAssignment(tenantId, data = {}, { isCreate = false } = {}) {
+  // String vazia (ex.: seletor do front antes dos perfis carregarem) NÃO é um id:
+  // trata como "não informado" para cair no papel fixo, evitando lookup inválido.
+  if (data.roleId === '') data = { ...data, roleId: undefined };
   if (data.roleId === undefined) {
     // Sem roleId no payload → usa/valida a string `role` (comportamento atual).
     if (isCreate) {

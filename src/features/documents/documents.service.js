@@ -409,7 +409,7 @@ async function generateAndStorePdf(document, html) {
   const pdfDriver = detectPdfDriver(buffer);
   const file = await storage.saveFile({
     tenantId: document.tenantId,
-    fileName: `${document.documentType}-${document.number}-${document.year}.pdf`,
+    fileName: `${document.documentType}-${String(document.formattedNumber || document.number).replace(/\//g, '-')}.pdf`,
     content: buffer,
     mimeType: 'application/pdf',
   });
@@ -525,7 +525,7 @@ async function createIssuedDocument(
 
     const file = await storage.saveFile({
       tenantId,
-      fileName: `${documentType}-${number}-${year}.html`,
+      fileName: `${documentType}-${String(formattedNumber).replace(/\//g, '-')}.html`,
       content: Buffer.from(html),
       mimeType: 'text/html',
     });
@@ -838,12 +838,21 @@ async function remove(tenantId, id) {
     status: document.status,
   };
 
+  // 2ªs vias que apontam para este documento (FK original_document_id é RESTRICT):
+  // desvincula ANTES de apagar para não violar a FK. As reemissões SOBREVIVEM como
+  // documentos autônomos (perdem apenas o vínculo com o original ora excluído).
+  await Document.update(
+    { originalDocumentId: null },
+    { where: { originalDocumentId: id, tenantId }, skipAudit: true }
+  );
+
   // Apaga os arquivos do storage (HTML fonte + PDF), se houver.
   await deleteStoredFile(document.fileUrl);
   await deleteStoredFile(document.pdfUrl);
 
   // skipAudit: o hook genérico logaria 'exclusao' genérica; registramos abaixo o
   // evento semântico com número/tipo do documento oficial apagado.
+  // (Assinaturas vinculadas são apagadas em cascata pela FK document_id.)
   await document.destroy({ skipAudit: true });
 
   audit.record({
@@ -896,7 +905,7 @@ async function getOrCreatePdf(tenantId, id) {
   try {
     const file = await storage.saveFile({
       tenantId,
-      fileName: `${document.documentType}-${document.number}-${document.year}.pdf`,
+      fileName: `${document.documentType}-${String(document.formattedNumber || document.number).replace(/\//g, '-')}.pdf`,
       content: buffer,
       mimeType: 'application/pdf',
     });

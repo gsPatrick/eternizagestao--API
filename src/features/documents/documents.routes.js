@@ -21,7 +21,8 @@ router.get('/:id', controller.getById);
 router.post('/', write, controller.issue);
 router.post('/:id/reissue', write, controller.reissue);
 router.patch('/:id/cancel', write, controller.cancel);
-// Exclusão definitiva — ação sensível, restrita a admin.
+// Exclusão definitiva — ação sensível, restrita a admin. O service desvincula
+// as 2ªs vias (FK original_document_id) antes do hard delete e remove os arquivos.
 router.delete('/:id', authorize('admin'), controller.remove);
 
 module.exports = router;

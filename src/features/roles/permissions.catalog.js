@@ -2,78 +2,52 @@
 
 /**
  * CATÁLOGO DE PERMISSÕES GRANULARES (RBAC customizável) — fonte única da verdade
- * dos MÓDULOS × AÇÕES que um perfil pode conceder, e dos MAPAS PADRÃO por
+ * dos RECURSOS × AÇÕES que um perfil pode conceder, e dos MAPAS PADRÃO por
  * baseRole (admin / operador / consulta).
+ *
+ * ESPELHA a matriz "Permissões por perfil" que o cliente já usa na tela de
+ * usuários (front: constante PERMISSION_MODULES em lib/permissions-catalog.js —
+ * mesmas chaves de recurso/ação). Assim, criar um perfil (nome + checkboxes)
+ * gera uma COLUNA na mesma matriz bonita, com os mesmos rótulos.
  *
  * PORQUÊ deste desenho (segurança em produção):
  *  - O middleware `authorize(...)` das dezenas de rotas continua intocado: ele
- *    compara `req.user.role` (a STRING admin|operador|consulta) com os papéis
- *    permitidos. Um perfil customizado SEMPRE herda um `baseRole` que é gravado
- *    em `user.role` — então o TETO de acesso de qualquer perfil novo é o do seu
- *    baseRole, e nenhuma rota fica mais permissiva do que já era.
- *  - As permissões granulares abaixo só REFINAM (restringem) dentro desse teto,
- *    via o middleware opcional `requirePermission(modulo, acao)`. Por isso o
- *    mapa de um perfil é "clampado" (interseccionado) ao teto do baseRole: não
- *    faz sentido (nem teria efeito) conceder "criar" a um perfil de base
- *    "consulta", já que o authorize das rotas de escrita barra consulta antes.
+ *    compara `req.user.role` (a STRING admin|operador|consulta). Um perfil
+ *    customizado SEMPRE herda um `baseRole` gravado em `user.role` — então o TETO
+ *    de acesso de qualquer perfil novo é o do seu baseRole, e nenhuma rota fica
+ *    mais permissiva do que já era.
+ *  - As permissões granulares só REFINAM (restringem) dentro desse teto, via o
+ *    middleware opcional `requirePermission(recurso, acao)`. Por isso o mapa de
+ *    um perfil é "clampado" (interseccionado) ao teto do baseRole.
  */
 
-// Módulos e ações exibidos na tela de perfis. As chaves são estáveis (contrato
-// com o front e com requirePermission); os rótulos são só apresentação.
+// Recursos e ações — IDÊNTICOS (chaves e ordem) à matriz PERMISSIONS original.
+// Os `label` são apresentação (espelhados no front); as `key` são o contrato.
 const MODULES = [
   {
-    key: 'sepulturas',
-    label: 'Sepulturas & lotes',
-    desc: 'Cadastro de sepulturas, quadras e lotes',
+    key: 'cadastros',
+    label: 'Cadastros',
+    desc: 'Sepulturas, pessoas, concessões e sepultados',
     actions: [
       { key: 'ver', label: 'Visualizar' },
       { key: 'criar', label: 'Criar' },
       { key: 'editar', label: 'Editar' },
       { key: 'excluir', label: 'Excluir' },
-    ],
-  },
-  {
-    key: 'pessoas',
-    label: 'Pessoas, proprietários & responsáveis',
-    desc: 'Cadastro de pessoas e vínculos',
-    actions: [
-      { key: 'ver', label: 'Visualizar' },
-      { key: 'criar', label: 'Criar' },
-      { key: 'editar', label: 'Editar' },
-      { key: 'excluir', label: 'Excluir' },
-    ],
-  },
-  {
-    key: 'concessoes',
-    label: 'Concessões',
-    desc: 'Concessões e transferências',
-    actions: [
-      { key: 'ver', label: 'Visualizar' },
-      { key: 'criar', label: 'Criar' },
-      { key: 'editar', label: 'Editar' },
+      { key: 'bloquear', label: 'Bloquear jazigo' },
     ],
   },
   {
     key: 'sepultados',
-    label: 'Sepultados & sepultamentos',
-    desc: 'Registros de óbito, sepultamentos e agendamentos',
+    label: 'Sepultados & exumações',
+    desc: 'Registros, agendamentos e autorizações',
     actions: [
       { key: 'ver', label: 'Visualizar' },
       { key: 'registrar', label: 'Registrar / agendar' },
+      { key: 'autorizar', label: 'Autorizar exumação' },
     ],
   },
   {
-    key: 'exumacoes',
-    label: 'Exumações',
-    desc: 'Exumações e depósito de restos',
-    actions: [
-      { key: 'ver', label: 'Visualizar' },
-      { key: 'registrar', label: 'Registrar' },
-      { key: 'autorizar', label: 'Autorizar' },
-    ],
-  },
-  {
-    key: 'cobrancas',
+    key: 'financeiro',
     label: 'Financeiro',
     desc: 'Cobranças, baixas e 2ª via',
     actions: [
@@ -107,7 +81,7 @@ const MODULES = [
     label: 'Relatórios & exportações',
     desc: 'Indicadores e exportação de dados',
     actions: [
-      { key: 'ver', label: 'Visualizar' },
+      { key: 'ver', label: 'Visualizar relatórios' },
       { key: 'exportar', label: 'Exportar dados' },
     ],
   },
@@ -128,27 +102,15 @@ const MODULES = [
   },
   {
     key: 'usuarios',
-    label: 'Usuários & perfis',
-    desc: 'Convites, perfis e permissões',
-    actions: [
-      { key: 'ver', label: 'Visualizar' },
-      { key: 'gerenciar', label: 'Gerenciar' },
-    ],
-  },
-  {
-    key: 'configuracoes',
-    label: 'Configurações da cidade',
-    desc: 'Identidade, órgão gestor e integrações',
-    actions: [
-      { key: 'ver', label: 'Visualizar' },
-      { key: 'gerenciar', label: 'Gerenciar' },
-    ],
+    label: 'Usuários & configurações',
+    desc: 'Perfis, convites e parâmetros',
+    actions: [{ key: 'gerenciar', label: 'Gerenciar tudo' }],
   },
 ];
 
 const VALID_ROLES = ['admin', 'operador', 'consulta'];
 
-// Constrói um mapa { modulo: [acoes...] } aplicando um filtro por ação.
+// Constrói um mapa { recurso: [acoes...] } aplicando um filtro por ação.
 function buildMap(filter) {
   const map = {};
   for (const mod of MODULES) {
@@ -158,21 +120,23 @@ function buildMap(filter) {
   return map;
 }
 
-// admin: teto TOTAL — todas as ações de todos os módulos.
+// admin: teto TOTAL — todas as ações (coluna "a" da matriz original).
 const ADMIN_MAP = buildMap(() => true);
 
-// operador: opera o dia a dia; SEM gestão de usuários/configurações, SEM
-// auditoria, SEM excluir cadastros e SEM confirmar importação em produção.
+// operador: coluna "o" — opera o dia a dia; SEM excluir/bloquear cadastro, SEM
+// confirmar importação em produção, SEM auditoria e SEM gestão de usuários/config.
 const OPERADOR_MAP = buildMap((mod, action) => {
-  if (['usuarios', 'configuracoes', 'auditoria'].includes(mod)) return false;
-  if (action === 'excluir') return false;
+  if (mod === 'cadastros' && (action === 'excluir' || action === 'bloquear')) return false;
   if (mod === 'importacoes' && action === 'confirmar') return false;
+  if (mod === 'auditoria') return false;
+  if (mod === 'usuarios') return false;
   return true;
 });
 
-// consulta: SOMENTE leitura — apenas a ação "ver" dos módulos consultáveis.
+// consulta: coluna "c" — SOMENTE leitura ("ver") dos recursos consultáveis.
 const CONSULTA_MAP = buildMap((mod, action) =>
-  action === 'ver' && !['importacoes', 'auditoria', 'usuarios', 'configuracoes'].includes(mod));
+  action === 'ver'
+  && ['cadastros', 'sepultados', 'financeiro', 'documentos', 'mapa', 'relatorios'].includes(mod));
 
 // Mapa padrão / TETO de cada baseRole. Também é o teto ao qual as permissões de
 // um perfil customizado são clampadas (interseccionadas) — ver roles.service.
@@ -182,7 +146,7 @@ const DEFAULTS = {
   consulta: CONSULTA_MAP,
 };
 
-// Conjunto {modulo: Set(acoes)} do catálogo — para validar entradas do cliente.
+// Conjunto {recurso: Set(acoes)} do catálogo — para validar entradas do cliente.
 const CATALOG_INDEX = MODULES.reduce((acc, mod) => {
   acc[mod.key] = new Set(mod.actions.map((a) => a.key));
   return acc;

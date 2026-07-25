@@ -22,21 +22,45 @@ const SYSTEM_ROLES = [
   { name: 'Consulta', baseRole: 'consulta', description: 'Somente leitura em cadastros, mapa e relatórios.' },
 ];
 
-// Interseção do mapa pedido com (a) o catálogo e (b) o TETO do baseRole.
-// Descarta módulos/ações desconhecidos e qualquer permissão acima do teto.
-function sanitizePermissions(baseRole, requested = {}) {
-  const ceiling = DEFAULTS[baseRole] || {};
+// Sanitiza SÓ contra o catálogo: o cliente marca livremente qualquer permissão,
+// sem teto herdado. Só descartamos módulos/ações que não existem.
+function sanitizePermissions(requested = {}) {
   const out = {};
   if (!requested || typeof requested !== 'object') return out;
   for (const [mod, actions] of Object.entries(requested)) {
     if (!CATALOG_INDEX[mod] || !Array.isArray(actions)) continue;
-    const allowedForCeiling = new Set(ceiling[mod] || []);
-    const kept = actions.filter(
-      (a) => CATALOG_INDEX[mod].has(a) && allowedForCeiling.has(a)
-    );
+    const kept = actions.filter((a) => CATALOG_INDEX[mod].has(a));
     if (kept.length) out[mod] = kept;
   }
   return out;
+}
+
+// DERIVA o baseRole (string do authorize) a partir das permissões marcadas.
+// É o "piso de segurança": o menor papel fixo que comporta o que o perfil
+// concede, para o authorize das rotas não barrar o que o cliente permitiu.
+//  - admin: mexe em usuários/auditoria/importação em produção, ou exclui/bloqueia
+//    cadastro (ações que o authorize já reserva ao admin);
+//  - operador: qualquer ação de ESCRITA;
+//  - consulta: só leitura.
+function deriveBaseRole(perms = {}) {
+  const has = (mod, act) => Array.isArray(perms[mod]) && perms[mod].includes(act);
+  const anyOf = (mod, acts) => acts.some((a) => has(mod, a));
+  const precisaAdmin =
+    (perms.usuarios && perms.usuarios.length) ||
+    has('auditoria', 'ver') ||
+    has('importacoes', 'confirmar') ||
+    has('cadastros', 'excluir') ||
+    has('cadastros', 'bloquear');
+  if (precisaAdmin) return 'admin';
+  const escreve =
+    anyOf('cadastros', ['criar', 'editar']) ||
+    anyOf('sepultados', ['registrar', 'autorizar']) ||
+    anyOf('financeiro', ['gerar', 'baixar', 'cancelar']) ||
+    anyOf('documentos', ['emitir', 'cancelar']) ||
+    anyOf('mapa', ['editar']) ||
+    anyOf('relatorios', ['exportar']) ||
+    anyOf('importacoes', ['enviar']);
+  return escreve ? 'operador' : 'consulta';
 }
 
 function serialize(role) {
@@ -96,23 +120,18 @@ async function getById(tenantId, id) {
 async function create(tenantId, data = {}) {
   const name = String(data.name || '').trim();
   if (!name) throw AppError.badRequest('Informe o nome do perfil.', 'MISSING_NAME');
-  if (!VALID_ROLES.includes(data.baseRole)) {
-    throw AppError.badRequest(
-      `Perfil-base inválido. Permitidos: ${VALID_ROLES.join(', ')}`,
-      'INVALID_BASE_ROLE'
-    );
-  }
   // Nome único por cidade (case-insensitive) — evita perfis duplicados.
   const clash = await Role.findOne({
     where: { tenantId, name: { [Op.iLike]: name } },
   });
   if (clash) throw AppError.conflict('Já existe um perfil com este nome.', 'ROLE_NAME_IN_USE');
 
+  const permissions = sanitizePermissions(data.permissions);
   const role = await Role.create({
     tenantId,
     name,
-    baseRole: data.baseRole,
-    permissions: sanitizePermissions(data.baseRole, data.permissions),
+    baseRole: deriveBaseRole(permissions), // derivado das permissões marcadas
+    permissions,
     isSystem: false, // criado pelo cliente nunca é de sistema
     description: data.description ? String(data.description).trim().slice(0, 255) : null,
   });
@@ -139,18 +158,10 @@ async function update(tenantId, id, data = {}) {
     }
     patch.name = name;
   }
-  // baseRole pode mudar; nesse caso as permissões são reclampadas ao novo teto.
-  const baseRole = data.baseRole !== undefined ? data.baseRole : role.baseRole;
-  if (data.baseRole !== undefined && !VALID_ROLES.includes(data.baseRole)) {
-    throw AppError.badRequest(
-      `Perfil-base inválido. Permitidos: ${VALID_ROLES.join(', ')}`,
-      'INVALID_BASE_ROLE'
-    );
-  }
-  if (data.baseRole !== undefined) patch.baseRole = data.baseRole;
-  if (data.permissions !== undefined || data.baseRole !== undefined) {
-    const requested = data.permissions !== undefined ? data.permissions : role.permissions;
-    patch.permissions = sanitizePermissions(baseRole, requested);
+  // As permissões são livres; o baseRole é sempre DERIVADO delas (não escolhido).
+  if (data.permissions !== undefined) {
+    patch.permissions = sanitizePermissions(data.permissions);
+    patch.baseRole = deriveBaseRole(patch.permissions);
   }
   if (data.description !== undefined) {
     patch.description = data.description ? String(data.description).trim().slice(0, 255) : null;

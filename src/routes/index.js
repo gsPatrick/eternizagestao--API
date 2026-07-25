@@ -4,6 +4,8 @@
 // exceto health/ping (probes de orquestração).
 const { Router } = require('express');
 const { contextMiddleware } = require('../middlewares/request-context');
+const auth = require('../middlewares/auth');
+const enforcePermissions = require('../middlewares/enforce-permissions');
 
 const router = Router();
 
@@ -54,6 +56,12 @@ router.use('/v1/sessions', require('../features/sessions/sessions.routes'));
 router.use('/v1/tenants', require('../features/tenants/tenants.routes'));
 router.use('/v1/tenant', require('../features/tenants/onboarding.routes'));
 router.use('/v1/tenant', require('../features/tenants/integrations.routes'));
+// ENFORCEMENT do RBAC por perfil: resolve o usuário (auth) e barra a ESCRITA em
+// módulos que o perfil não concede. A partir daqui, todo acesso administrativo é
+// filtrado pelo perfil vigente. Rotas públicas/login/onboarding ficam acima e
+// não passam por isto. (auth é idempotente — cada router reaplica o seu.)
+router.use('/v1', auth, enforcePermissions);
+
 router.use('/v1/users', require('../features/users/users.routes'));
 // Perfis de permissão customizáveis (RBAC) — CRUD tenant-scoped (authorize admin)
 router.use('/v1/roles', require('../features/roles/roles.routes'));

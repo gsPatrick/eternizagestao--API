@@ -21,5 +21,7 @@ router.get('/:id', controller.getById);
 router.post('/', write, controller.issue);
 router.post('/:id/reissue', write, controller.reissue);
 router.patch('/:id/cancel', write, controller.cancel);
+// Exclusão definitiva — ação sensível, restrita a admin.
+router.delete('/:id', authorize('admin'), controller.remove);
 
 module.exports = router;

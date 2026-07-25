@@ -32,6 +32,7 @@ fs.readdirSync(__dirname)
 const {
   Tenant,
   User,
+  Role,
   Cemetery,
   Orthophoto,
   MapPath,
@@ -82,6 +83,13 @@ const {
 // ---------- Plataforma / multi-tenant ----------
 Tenant.hasMany(User, { foreignKey: 'tenantId', as: 'users' });
 User.belongsTo(Tenant, { foreignKey: 'tenantId', as: 'tenant' });
+
+// Perfis de permissão customizáveis (RBAC) — tenant-scoped.
+Tenant.hasMany(Role, { foreignKey: 'tenantId', as: 'roles' });
+Role.belongsTo(Tenant, { foreignKey: 'tenantId', as: 'tenant' });
+// User → Role opcional. `as: customRole` para não colidir com a coluna `role`.
+Role.hasMany(User, { foreignKey: 'roleId', as: 'users' });
+User.belongsTo(Role, { foreignKey: 'roleId', as: 'customRole' });
 
 Tenant.hasMany(Cemetery, { foreignKey: 'tenantId', as: 'cemeteries' });
 Cemetery.belongsTo(Tenant, { foreignKey: 'tenantId', as: 'tenant' });

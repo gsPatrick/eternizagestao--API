@@ -55,6 +55,8 @@ router.use('/v1/tenants', require('../features/tenants/tenants.routes'));
 router.use('/v1/tenant', require('../features/tenants/onboarding.routes'));
 router.use('/v1/tenant', require('../features/tenants/integrations.routes'));
 router.use('/v1/users', require('../features/users/users.routes'));
+// Perfis de permissão customizáveis (RBAC) — CRUD tenant-scoped (authorize admin)
+router.use('/v1/roles', require('../features/roles/roles.routes'));
 
 /* -------------------------------------------------------------------------
  * Fase 1 — Estrutura física e cadastros-base

@@ -43,6 +43,11 @@ const cancel = catchAsync(async (req, res) => {
   return ok(res, await service.cancel(getTenantId(req), req.params.id, req.body.reason));
 });
 
+// EXCLUSÃO definitiva do documento (admin) — apaga registro + arquivos e audita.
+const remove = catchAsync(async (req, res) => {
+  return ok(res, await service.remove(getTenantId(req), req.params.id));
+});
+
 // Texto legal por cidade (certidão/autorização) — usado nos modelos oficiais.
 const getSettings = catchAsync(async (req, res) => {
   return ok(res, await service.getSettings(getTenantId(req)));
@@ -53,4 +58,4 @@ const updateSettings = catchAsync(async (req, res) => {
   return ok(res, await service.updateSettings(getTenantId(req), body));
 });
 
-module.exports = { list, getById, downloadPdf, issue, reissue, cancel, getSettings, updateSettings };
+module.exports = { list, getById, downloadPdf, issue, reissue, cancel, remove, getSettings, updateSettings };

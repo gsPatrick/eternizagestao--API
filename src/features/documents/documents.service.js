@@ -470,7 +470,7 @@ async function createIssuedDocument(
     graveId = null, deceasedId = null, personId = null, userId = null,
     notes = null,
   },
-  { originalDocumentId = null, reissueCount = 0 } = {}
+  { originalDocumentId = null, reissueCount = 0, reuseNumber = null } = {}
 ) {
   if (!DOCUMENT_TYPES.includes(documentType)) {
     throw AppError.badRequest(
@@ -481,8 +481,13 @@ async function createIssuedDocument(
 
   let brandedHtml = null; // HTML branded desta emissão — reaproveitado para o PDF
   const issuedDocument = await sequelize.transaction(async (transaction) => {
-    const year = new Date().getFullYear();
-    const { number, formattedNumber } = await nextNumber({ tenantId, documentType, year, transaction });
+    // 2ª via: REUTILIZA o número (e o ano) do documento original — a 2ª via é o
+    // MESMO documento reimpresso, então mantém a mesma identidade (formattedNumber).
+    // A numeração sequencial (nextNumber) só corre na 1ª via/emissão normal.
+    const year = reuseNumber ? reuseNumber.year : new Date().getFullYear();
+    const { number, formattedNumber } = reuseNumber
+      ? { number: reuseNumber.number, formattedNumber: reuseNumber.formattedNumber }
+      : await nextNumber({ tenantId, documentType, year, transaction });
     const template = await resolveTemplate(tenantId, documentType, templateId, transaction);
     // Marca do órgão gestor (logo/cores/nome/CNPJ/contatos) — vale para o
     // DEFAULT_HTML e para os templates customizados do tenant.
@@ -739,10 +744,18 @@ async function list(tenantId, query) {
   return { rows, meta: buildPageMeta(count, page, perPage) };
 }
 
-// 2ª via: nova emissão (novo número) copiando tipo/refs; o original permanece válido.
+// 2ª via: reimpressão do MESMO documento — MANTÉM o número (formattedNumber) do
+// original, copiando tipo/refs; o original permanece válido. O número do
+// documento é a sua identidade: a 2ª via não gera número novo, apenas reimprime.
 async function reissue(tenantId, id, userId) {
   const original = await Document.findOne({ where: { id, tenantId } });
   if (!original) throw AppError.notFound('Documento não encontrado.');
+
+  const newReissueCount = original.reissueCount + 1;
+  // Número RAIZ (o sequencial oficial visível), lido do formattedNumber — assim
+  // a 2ª via de uma 2ª via (cujo `number` interno já é negativo) ainda deriva do
+  // número original correto. Fallback para o inteiro quando não parseável.
+  const rootNumber = parseInt(String(original.formattedNumber).split('/')[0], 10) || Math.abs(original.number);
 
   return createIssuedDocument(
     {
@@ -761,7 +774,28 @@ async function reissue(tenantId, id, userId) {
       notes: original.notes,
       userId,
     },
-    { originalDocumentId: original.id, reissueCount: original.reissueCount + 1 }
+    {
+      originalDocumentId: original.id,
+      reissueCount: newReissueCount,
+      // Reutiliza a IDENTIDADE do original — a 2ª via é o MESMO documento: exibe
+      // o MESMO formattedNumber ("0011/2026") e o mesmo ano. É este número que o
+      // cliente vê e que estava saindo diferente.
+      //
+      // Sobre a coluna inteira `number`: existe um índice ÚNICO no banco
+      // (documents_sequential_number_unique em tenant_id+document_type+year+number)
+      // que IMPEDE duas linhas com o mesmo `number`. Não podemos, portanto,
+      // repetir o inteiro do original (violaria a constraint) nem consumir um novo
+      // número da sequência (abriria um BURACO na numeração oficial das 1ªs vias).
+      // Solução: a 2ª via recebe um `number` NEGATIVO derivado do número raiz +
+      // reissueCount — nunca colide com os inteiros positivos da sequência real,
+      // é único entre reemissões, e NÃO toca o DocumentSequence. O inteiro é
+      // interno; o que aparece (formattedNumber) permanece idêntico ao original.
+      reuseNumber: {
+        number: -(rootNumber * 1000 + newReissueCount),
+        formattedNumber: original.formattedNumber,
+        year: original.year,
+      },
+    }
   );
 }
 
@@ -778,6 +812,49 @@ async function cancel(tenantId, id, reason) {
       ? `${document.notes ? `${document.notes}\n` : ''}Cancelamento: ${reason}`
       : document.notes,
   });
+}
+
+// Remove um arquivo do storage local a partir do seu fileUrl (/files/<path>).
+// Best-effort: qualquer falha é engolida (o registro é o que importa apagar).
+async function deleteStoredFile(fileUrl) {
+  if (!fileUrl || !fileUrl.startsWith(`${storage.PUBLIC_PREFIX}/`)) return;
+  const storagePath = fileUrl.slice(storage.PUBLIC_PREFIX.length + 1);
+  await storage.deleteFile(storagePath).catch(() => {});
+}
+
+/**
+ * EXCLUSÃO de documento — ação sensível (admin). O modelo Document NÃO é paranoid
+ * (timestamps sem deletedAt), então é HARD DELETE: apagamos o registro e também
+ * os arquivos gerados no storage (HTML fonte + PDF oficial). Registrado na
+ * auditoria com o número/tipo para rastreabilidade de um documento oficial.
+ */
+async function remove(tenantId, id) {
+  const document = await Document.findOne({ where: { id, tenantId } });
+  if (!document) throw AppError.notFound('Documento não encontrado.');
+
+  const snapshot = {
+    numero: document.formattedNumber,
+    tipo: document.documentType,
+    status: document.status,
+  };
+
+  // Apaga os arquivos do storage (HTML fonte + PDF), se houver.
+  await deleteStoredFile(document.fileUrl);
+  await deleteStoredFile(document.pdfUrl);
+
+  // skipAudit: o hook genérico logaria 'exclusao' genérica; registramos abaixo o
+  // evento semântico com número/tipo do documento oficial apagado.
+  await document.destroy({ skipAudit: true });
+
+  audit.record({
+    action: audit.ACTIONS.EXCLUSAO,
+    entityType: 'Documento',
+    entityId: id,
+    description: `${TYPE_TITLES[snapshot.tipo] || 'Documento'} ${snapshot.numero} excluído`,
+    previousData: snapshot,
+  });
+
+  return { id };
 }
 
 // Serializa um Document para a resposta HTTP trocando o fileUrl cru pela URL
@@ -840,7 +917,7 @@ async function updateSettings(tenantId, body) {
 }
 
 module.exports = {
-  issueDocument, issueFromRequest, reissue, cancel, list, getById,
+  issueDocument, issueFromRequest, reissue, cancel, remove, list, getById,
   toResponse, getOrCreatePdf, DOCUMENT_TYPES,
   getSettings, updateSettings,
 };

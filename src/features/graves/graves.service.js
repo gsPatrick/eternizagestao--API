@@ -521,21 +521,33 @@ async function update(tenantId, id, data, userId) {
   // erro de cadastro apagando e recriando a sepultura — o que levava junto o
   // histórico, os documentos e a demarcação no mapa. A estrutura de destino é
   // criada se não existir, mesma regra do cadastro.
+  let novoLote = null;
   if (data.cemeteryId || data.block || data.lot || data.street) {
-    const lot = await resolveLotFromText(tenantId, {
+    novoLote = await resolveLotFromText(tenantId, {
       cemeteryId: data.cemeteryId || grave.cemeteryId,
       block: data.block,
       street: data.street,
       lot: data.lot,
     });
-    data.lotId = lot.id;
-    data.cemeteryId = lot.cemeteryId;
+    data.lotId = novoLote.id;
+    data.cemeteryId = novoLote.cemeteryId;
   }
 
   const campos = {};
   for (const f of [...EDITABLE_FIELDS, 'lotId', 'cemeteryId']) {
     if (data[f] !== undefined) campos[f] = data[f];
   }
+
+  // RECALCULA O CÓDIGO quando o lote muda. O code é DERIVADO de quadra-lote
+  // (ver nextGraveCode) e era gravado só no cadastro: ao corrigir o número do
+  // jazigo (ex.: 49 → 99), a tela mostrava o lote novo mas o `code` continuava
+  // "M4-49" congelado — a "referência errada" relatada pelo cliente. Só
+  // recalculamos quando o operador NÃO informou um código explícito (o
+  // formulário padrão não informa) e o lote realmente mudou.
+  if (novoLote && data.code === undefined && novoLote.id !== grave.lotId) {
+    campos.code = await nextGraveCode(tenantId, novoLote);
+  }
+
   await grave.update(campos);
   // Passou a ser PERPÉTUA na edição → emite a certidão (se ainda não houver).
   await tryPerpetuityCertificate(tenantId, grave, userId);

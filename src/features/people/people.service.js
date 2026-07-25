@@ -9,7 +9,7 @@ const { randomToken } = require('../../utils/password');
 const { portalActivationUrl } = require('../../utils/tenant-url');
 const {
   Person, PersonRelationship, Concession, Grave,
-  FamilyPortalAccount, MaintenanceFee, Tenant,
+  FamilyPortalAccount, MaintenanceFee, Tenant, Deceased, Burial,
 } = require('../../models');
 
 // Foto da pessoa: aceita PNG/JPEG/WEBP; teto de 5 MB (foto de perfil).
@@ -76,8 +76,14 @@ function roleExists(role) {
     case 'proprietario':
       return literal('EXISTS (SELECT 1 FROM concessions c WHERE c.person_id = "Person".id AND c.tenant_id = "Person".tenant_id AND c.deleted_at IS NULL)');
     case 'responsavel':
-      // responsável LEGAL de alguma concessão (§3.2) — distinto do proprietário.
-      return literal('EXISTS (SELECT 1 FROM concessions c WHERE c.responsible_person_id = "Person".id AND c.tenant_id = "Person".tenant_id AND c.deleted_at IS NULL)');
+      // Responsável por CONCESSÃO ou por SEPULTAMENTO. O cliente cadastrou um
+      // responsável de sepultamento e ele não aparecia no menu — o filtro só
+      // olhava concessões. Agora cobre as três relações que definem o papel.
+      return literal(
+        '(EXISTS (SELECT 1 FROM concessions c WHERE c.responsible_person_id = "Person".id AND c.tenant_id = "Person".tenant_id AND c.deleted_at IS NULL)'
+        + ' OR EXISTS (SELECT 1 FROM deceased d WHERE d.responsible_person_id = "Person".id AND d.tenant_id = "Person".tenant_id AND d.deleted_at IS NULL)'
+        + ' OR EXISTS (SELECT 1 FROM burials b WHERE b.declarant_person_id = "Person".id AND b.tenant_id = "Person".tenant_id AND b.status = \'ativo\'))'
+      );
     case 'familiar':
       return literal('EXISTS (SELECT 1 FROM person_relationships pr WHERE pr.tenant_id = "Person".tenant_id AND (pr.person_id = "Person".id OR pr.related_person_id = "Person".id))');
     case 'portal':
@@ -113,7 +119,7 @@ async function annotate(tenantId, people) {
   const ids = people.map((p) => p.id);
   if (!ids.length) return [];
 
-  const [concCounts, respCounts, relOwner, relRelated, portals] = await Promise.all([
+  const [concCounts, respCounts, decRespCounts, burDeclCounts, relOwner, relRelated, portals] = await Promise.all([
     Concession.findAll({
       where: { tenantId, personId: { [Op.in]: ids } },
       attributes: ['personId', [fn('COUNT', col('id')), 'count']],
@@ -124,6 +130,18 @@ async function annotate(tenantId, people) {
       where: { tenantId, responsiblePersonId: { [Op.in]: ids } },
       attributes: ['responsiblePersonId', [fn('COUNT', col('id')), 'count']],
       group: ['responsiblePersonId'], raw: true,
+    }),
+    // responsável por SEPULTADO
+    Deceased.findAll({
+      where: { tenantId, responsiblePersonId: { [Op.in]: ids } },
+      attributes: ['responsiblePersonId', [fn('COUNT', col('id')), 'count']],
+      group: ['responsiblePersonId'], raw: true,
+    }),
+    // declarante de SEPULTAMENTO
+    Burial.findAll({
+      where: { tenantId, declarantPersonId: { [Op.in]: ids } },
+      attributes: ['declarantPersonId', [fn('COUNT', col('id')), 'count']],
+      group: ['declarantPersonId'], raw: true,
     }),
     PersonRelationship.findAll({
       where: { tenantId, personId: { [Op.in]: ids } },
@@ -142,7 +160,10 @@ async function annotate(tenantId, people) {
   const concMap = {};
   concCounts.forEach((r) => { concMap[r.personId] = Number(r.count); });
   const respMap = {};
-  respCounts.forEach((r) => { respMap[r.responsiblePersonId] = Number(r.count); });
+  // Responsável = soma das três relações (concessão, sepultado, sepultamento).
+  respCounts.forEach((r) => { respMap[r.responsiblePersonId] = (respMap[r.responsiblePersonId] || 0) + Number(r.count); });
+  decRespCounts.forEach((r) => { respMap[r.responsiblePersonId] = (respMap[r.responsiblePersonId] || 0) + Number(r.count); });
+  burDeclCounts.forEach((r) => { respMap[r.declarantPersonId] = (respMap[r.declarantPersonId] || 0) + Number(r.count); });
   const familiarSet = new Set([
     ...relOwner.map((r) => r.personId),
     ...relRelated.map((r) => r.relatedPersonId),

@@ -16,6 +16,12 @@ module.exports = (sequelize, DataTypes) => {
         allowNull: false,
         defaultValue: 'operador',
       },
+      // Perfil de permissão CUSTOMIZADO (opcional). Quando presente, refina o
+      // acesso via permissões granulares; quando ausente, o comportamento cai
+      // no papel fixo pela string `role` acima (compatibilidade total). O
+      // `role` continua sendo o TETO — ao vincular um Role, gravamos
+      // `role = role.baseRole`, então o authorize das rotas nunca muda.
+      roleId: { type: DataTypes.UUID, allowNull: true },
       active: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: true },
       // trocar senha no 1º acesso (admin criado com senha temporária no convite)
       mustChangePassword: { type: DataTypes.BOOLEAN, allowNull: false, defaultValue: false },

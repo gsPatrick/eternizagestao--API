@@ -17,12 +17,12 @@ const getById = catchAsync(async (req, res) => {
 
 const create = catchAsync(async (req, res) => {
   requireFields(req.body, ['name', 'email', 'password']);
-  const data = pick(req.body, ['name', 'email', 'phone', 'password', 'role']);
+  const data = pick(req.body, ['name', 'email', 'phone', 'password', 'role', 'roleId']);
   return created(res, await service.create(getTenantId(req), data));
 });
 
 const update = catchAsync(async (req, res) => {
-  const data = pick(req.body, ['name', 'email', 'phone', 'role']);
+  const data = pick(req.body, ['name', 'email', 'phone', 'role', 'roleId']);
   return ok(res, await service.update(getTenantId(req), req.params.id, data));
 });
 
@@ -47,8 +47,18 @@ const remove = catchAsync(async (req, res) => {
 
 const invite = catchAsync(async (req, res) => {
   requireFields(req.body, ['name', 'email']);
-  const data = pick(req.body, ['name', 'email', 'phone', 'role']);
+  const data = pick(req.body, ['name', 'email', 'phone', 'role', 'roleId']);
   return created(res, await service.invite(getTenantId(req), data, req.user));
+});
+
+// POST /users/tenant-admin-password — (super_admin) define a senha do admin de
+// uma cidade. NÃO usa getTenantId (super_admin não tem tenant): o tenantId alvo
+// vem no corpo. A rota é super_admin-only (authorize() sem papéis).
+const setTenantAdminPassword = catchAsync(async (req, res) => {
+  requireFields(req.body, ['tenantId', 'password']);
+  const { tenantId, password, userId } = req.body;
+  const admin = await service.setTenantAdminPassword(tenantId, password, { userId });
+  return ok(res, admin);
 });
 
 const resendInvite = catchAsync(async (req, res) => {
@@ -71,4 +81,5 @@ module.exports = {
   invite,
   resendInvite,
   passwordReset,
+  setTenantAdminPassword,
 };

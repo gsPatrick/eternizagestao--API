@@ -19,5 +19,6 @@ router.get('/schedules/:id', controller.getById);
 router.post('/schedules', write, controller.create);
 router.patch('/schedules/:id', write, controller.update);
 router.patch('/schedules/:id/status', write, controller.changeStatus);
+router.delete('/schedules/:id', write, controller.remove);
 
 module.exports = router;

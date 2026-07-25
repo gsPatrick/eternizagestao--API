@@ -1,7 +1,7 @@
 'use strict';
 
 const catchAsync = require('../../utils/catch-async');
-const { ok, created } = require('../../utils/http-response');
+const { ok, created, noContent } = require('../../utils/http-response');
 const { requireFields, requireOneOf, pick } = require('../../utils/validation');
 const { getTenantId, getUserId } = require('../../utils/request-helpers');
 const service = require('./schedules.service');
@@ -35,4 +35,9 @@ const changeStatus = catchAsync(async (req, res) => {
   return ok(res, await service.changeStatus(getTenantId(req), req.params.id, req.body.status));
 });
 
-module.exports = { list, todayCount, getById, create, update, changeStatus };
+const remove = catchAsync(async (req, res) => {
+  await service.remove(getTenantId(req), req.params.id);
+  return noContent(res);
+});
+
+module.exports = { list, todayCount, getById, create, update, changeStatus, remove };

@@ -296,7 +296,18 @@ async function changeStatus(tenantId, id, status) {
   return getById(tenantId, schedule.id);
 }
 
+/**
+ * Exclui o agendamento (hard delete — a agenda não é registro civil, é
+ * operacional). O evento que veio do sepultamento também pode ser removido:
+ * some da agenda sem tocar no sepultamento em si.
+ */
+async function remove(tenantId, id) {
+  const schedule = await Schedule.findOne({ where: { id, tenantId } });
+  if (!schedule) throw AppError.notFound('Agendamento não encontrado.');
+  await schedule.destroy();
+}
+
 module.exports = {
-  list, getById, create, update, changeStatus, todayCount,
+  list, getById, create, update, changeStatus, remove, todayCount,
   SCHEDULE_TYPES, CREATE_FIELDS, UPDATE_FIELDS,
 };

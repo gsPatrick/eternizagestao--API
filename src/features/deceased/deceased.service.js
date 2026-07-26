@@ -372,6 +372,13 @@ async function remove(tenantId, id, { force = false } = {}) {
       });
       const graveIds = [...new Set(ativos.map((b) => b.graveId).filter(Boolean))];
 
+      // Nichos onde este sepultado tem restos depositados — para LIBERAR depois.
+      const depositos = await RemainsDeposit.findAll({
+        where: { tenantId, deceasedId: id, status: 'depositado' },
+        attributes: ['ossuaryNicheId'], transaction,
+      });
+      const nicheIds = [...new Set(depositos.map((d) => d.ossuaryNicheId).filter(Boolean))];
+
       await Burial.update(
         { status: 'transladado' },
         { where: { tenantId, deceasedId: id, status: 'ativo' }, transaction }
@@ -385,6 +392,21 @@ async function remove(tenantId, id, { force = false } = {}) {
       // Desocupa cada jazigo afetado (volta a "livre" se não sobrou ninguém ativo).
       for (const graveId of graveIds) {
         await syncGraveOccupancy({ graveId, tenantId, transaction });
+      }
+
+      // Libera cada nicho de ossário sem depósito ativo restante — antes o nicho
+      // ficava "ocupado" para sempre após excluir o sepultado (resíduo do que
+      // "não era excluído totalmente").
+      for (const nicheId of nicheIds) {
+        const restantes = await RemainsDeposit.count({
+          where: { tenantId, ossuaryNicheId: nicheId, status: 'depositado' }, transaction,
+        });
+        if (restantes === 0) {
+          await OssuaryNiche.update(
+            { status: 'livre' },
+            { where: { id: nicheId, tenantId }, transaction }
+          );
+        }
       }
     }
     await deceased.destroy({ transaction }); // soft delete

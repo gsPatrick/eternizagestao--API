@@ -5,6 +5,7 @@ const AppError = require('../../utils/app-error');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const graveEvents = require('../grave-timeline/grave-event.recorder');
 const graveStatuses = require('../grave-statuses/grave-statuses.service');
+const { syncGraveOccupancy } = require('../burials/burials.helper');
 const audit = require('../audit-logs/audit.service');
 const { todayISO } = require('../../utils/date-local');
 const {
@@ -347,6 +348,20 @@ async function terminate(tenantId, id, userId) {
       throw AppError.conflict(`Concessão com status '${concession.status}' não pode ser encerrada.`, 'CONCESSION_NOT_TERMINABLE');
     }
     await concession.update({ status: 'encerrada' }, { transaction });
+
+    // Libera o jazigo: a concessão perpétua marcava o jazigo como
+    // "em_perpetuidade"; encerrada (e sem OUTRA concessão ativa), ele volta a
+    // refletir a ocupação real (livre/ocupada). Antes ficava preso em perpétua
+    // para sempre — "o que foi encerrado não voltava ao que devia".
+    const outrasAtivas = await Concession.count({
+      where: { tenantId, graveId: concession.graveId, status: 'ativa' }, transaction,
+    });
+    if (outrasAtivas === 0) {
+      await syncGraveOccupancy({
+        graveId: concession.graveId, tenantId, transaction,
+        reclaimFrom: ['em_perpetuidade'],
+      });
+    }
 
     await graveEvents.record(
       {

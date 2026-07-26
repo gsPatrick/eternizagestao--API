@@ -69,8 +69,10 @@ async function assertGraveAcceptsBurial({ grave, tenantId, transaction } = {}) {
  * @param {string} [params.graveId] alternativa: id do jazigo a carregar
  * @param {string} params.tenantId
  * @param {object} [params.transaction]
+ * @param {string[]} [params.reclaimFrom] status manuais que TAMBÉM devem ser
+ *   recalculados (ex.: 'em_perpetuidade' ao encerrar a concessão que o pôs assim).
  */
-async function syncGraveOccupancy({ grave, graveId, tenantId, transaction } = {}) {
+async function syncGraveOccupancy({ grave, graveId, tenantId, transaction, reclaimFrom = [] } = {}) {
   const g = grave || (graveId
     ? await Grave.findOne({
       where: { id: graveId, tenantId },
@@ -81,7 +83,7 @@ async function syncGraveOccupancy({ grave, graveId, tenantId, transaction } = {}
   if (!g) return;
 
   const currentSlug = g.status?.slug;
-  const AUTO = new Set(['livre', 'ocupada']);
+  const AUTO = new Set(['livre', 'ocupada', ...reclaimFrom]);
   if (currentSlug && !AUTO.has(currentSlug)) return; // status manual: não mexe
 
   const capacity = g.capacity || 1;

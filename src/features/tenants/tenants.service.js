@@ -238,8 +238,15 @@ async function create(payload = {}, actor = {}) {
     tenantData.onboardingStatus = 'pendente';
   }
 
-  // Senha TEMPORÁRIA legível (o admin digita no 1º acesso e troca em seguida).
-  const tempPassword = generateTempPassword();
+  // Duas formas de acesso do 1º admin (escolha de quem cria):
+  //  - convite por e-mail: senha temporária aleatória + link (admin define no 1º acesso);
+  //  - senha definida agora: quem cria informa admin.password; NÃO envia e-mail,
+  //    devolve as credenciais para copiar e repassar (WhatsApp etc.).
+  const adminSetPassword = adminInput.password ? String(adminInput.password) : null;
+  if (adminSetPassword && adminSetPassword.length < 8) {
+    throw AppError.badRequest('A senha do administrador deve ter no mínimo 8 caracteres.', 'WEAK_PASSWORD');
+  }
+  const tempPassword = adminSetPassword || generateTempPassword();
   const passwordHash = await hashPassword(tempPassword);
 
   let tenant;
@@ -255,7 +262,8 @@ async function create(payload = {}, actor = {}) {
           phone: adminInput.phone ?? null,
           passwordHash,
           role: 'admin',
-          mustChangePassword: true, // obriga a definir a senha no 1º login
+          // convite → obriga trocar no 1º login; senha definida pelo criador → já vale.
+          mustChangePassword: !adminSetPassword,
         },
         { transaction: t }
       );
@@ -276,14 +284,20 @@ async function create(payload = {}, actor = {}) {
   // subir para quem chamou: sem o convite, o admin não conhece a senha
   // temporária e a cidade nasce inacessível. Antes isso morria num console.error
   // e a tela dizia "cidade criada" como se estivesse tudo certo.
-  const adminInvite = { sent: true, code: null, message: null };
-  try {
-    await sendAdminInvite(tenant, user, actor, tempPassword);
-  } catch (err) {
-    adminInvite.sent = false;
-    adminInvite.code = err.code || 'INVITE_FAILED';
-    adminInvite.message = err.message;
-    console.error('[tenants] convite ao primeiro admin falhou:', err.message);
+  // Senha definida pelo criador → NÃO envia e-mail; devolve as credenciais para
+  // copiar/repassar. Só o convite por e-mail dispara o envio.
+  const adminInvite = adminSetPassword
+    ? { sent: false, mode: 'password', code: null, message: null }
+    : { sent: true, mode: 'email', code: null, message: null };
+  if (!adminSetPassword) {
+    try {
+      await sendAdminInvite(tenant, user, actor, tempPassword);
+    } catch (err) {
+      adminInvite.sent = false;
+      adminInvite.code = err.code || 'INVITE_FAILED';
+      adminInvite.message = err.message;
+      console.error('[tenants] convite ao primeiro admin falhou:', err.message);
+    }
   }
 
   return {
@@ -291,6 +305,10 @@ async function create(payload = {}, actor = {}) {
     admin: serializeAdmin(user),
     domain: computeDomain(subdomain),
     adminInvite,
+    // Credenciais para copiar quando o criador definiu a senha (nunca no modo e-mail).
+    credentials: adminSetPassword
+      ? { email: adminEmail, password: adminSetPassword, loginUrl: computeDomain(subdomain) }
+      : null,
   };
 }
 

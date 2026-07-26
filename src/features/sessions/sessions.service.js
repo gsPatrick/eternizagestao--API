@@ -16,13 +16,33 @@ function signTenantLogo(tenant) {
   return t;
 }
 
-function serializeUser(user) {
+const { DEFAULTS } = require('../roles/permissions.catalog');
+const { Role } = require('../../models');
+
+// Permissões EFETIVAS do usuário para o front (sidebar + bloqueio de ações):
+//  - com perfil customizado (roleId) → as permissões do perfil;
+//  - sem perfil (admin/operador/consulta fixos) → o padrão do papel;
+//  - super_admin → tudo (o teto admin, já que na plataforma faz tudo).
+async function effectivePermissions(user) {
+  if (!user) return {};
+  if (user.role === 'super_admin') return DEFAULTS.admin;
+  if (user.roleId) {
+    const role = user.customRole || (await Role.findByPk(user.roleId));
+    if (role && role.permissions) return role.permissions;
+  }
+  return DEFAULTS[user.role] || {};
+}
+
+function serializeUser(user, permissions = null) {
   return {
     id: user.id,
     tenantId: user.tenantId,
     name: user.name,
     email: user.email,
     role: user.role,
+    roleId: user.roleId || null,
+    roleName: user.customRole ? user.customRole.name : null,
+    permissions: permissions || {},
     mustChangePassword: Boolean(user.mustChangePassword),
     lastLoginAt: user.lastLoginAt,
   };
@@ -43,6 +63,7 @@ function buildTokens(user) {
 async function login({ email, password, tenant }) {
   const candidates = await User.scope('withPassword').findAll({
     where: { email, active: true },
+    include: [{ model: Role, as: 'customRole', required: false }],
   });
 
   // prioriza usuário do tenant resolvido; sem tenant → super_admin (plataforma)
@@ -68,7 +89,7 @@ async function login({ email, password, tenant }) {
     description: `Login de ${user.name}`,
   });
 
-  return { user: serializeUser(user), ...buildTokens(user) };
+  return { user: serializeUser(user, await effectivePermissions(user)), ...buildTokens(user) };
 }
 
 async function refresh({ refreshToken }) {
@@ -80,15 +101,18 @@ async function refresh({ refreshToken }) {
   if (!user || !user.active) {
     throw AppError.unauthorized('Usuário inexistente ou inativo.', 'USER_INACTIVE');
   }
-  return { user: serializeUser(user), ...buildTokens(user) };
+  return { user: serializeUser(user, await effectivePermissions(user)), ...buildTokens(user) };
 }
 
 async function me(userId) {
   const user = await User.findByPk(userId, {
-    include: [{ model: Tenant, as: 'tenant', attributes: ['id', 'name', 'subdomain', 'logoUrl', 'primaryColor', 'secondaryColor'] }],
+    include: [
+      { model: Tenant, as: 'tenant', attributes: ['id', 'name', 'subdomain', 'logoUrl', 'primaryColor', 'secondaryColor'] },
+      { model: Role, as: 'customRole', required: false },
+    ],
   });
   if (!user) throw AppError.notFound('Usuário não encontrado.');
-  return { ...serializeUser(user), tenant: signTenantLogo(user.tenant) };
+  return { ...serializeUser(user, await effectivePermissions(user)), tenant: signTenantLogo(user.tenant) };
 }
 
 /**

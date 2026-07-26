@@ -1,7 +1,8 @@
 'use strict';
 
 const AppError = require('../../utils/app-error');
-const { Burial } = require('../../models');
+const { Burial, Grave, GraveStatus } = require('../../models');
+const graveStatuses = require('../grave-statuses/grave-statuses.service');
 
 /**
  * Validações compartilhadas de "este jazigo pode receber um sepultamento?".
@@ -28,7 +29,14 @@ async function assertGraveAcceptsBurial({ grave, tenantId, transaction } = {}) {
   if (grave.isBlocked) {
     throw new AppError(`Sepultura bloqueada: ${grave.blockedReason || 'sem motivo informado'}.`, 422, 'GRAVE_BLOCKED');
   }
-  if (!grave.status?.allowsBurial) {
+  // "ocupada" NÃO é um bloqueio real de sepultamento: é o rótulo automático de
+  // "lotado". Quem decide se ainda cabe alguém é a CAPACIDADE (jazigo com gavetas
+  // permite vários), logo abaixo. Tratar "ocupada" como proibição fazia um jazigo
+  // com gaveta livre — ou um jazigo que ficou "ocupada" preso após uma exclusão —
+  // recusar todo sepultamento novo (o erro que o cliente via voltar). Os demais
+  // status sem allowsBurial (interditada, em_manutencao, aguardando_regularizacao)
+  // continuam sendo bloqueio de verdade.
+  if (!grave.status?.allowsBurial && grave.status?.slug !== 'ocupada') {
     throw new AppError(`Status '${grave.status?.name}' não permite sepultamento.`, 422, 'STATUS_FORBIDS_BURIAL');
   }
 
@@ -42,4 +50,50 @@ async function assertGraveAcceptsBurial({ grave, tenantId, transaction } = {}) {
   return { activeBurials };
 }
 
-module.exports = { assertGraveAcceptsBurial };
+/**
+ * Recalcula o status de ocupação do jazigo a partir dos sepultamentos ATIVOS.
+ *
+ * Chamado sempre que um sepultamento é criado OU encerrado (sepultar, exumar,
+ * transladar, EXCLUIR o sepultado). Antes, a exclusão de um sepultado encerrava
+ * o sepultamento mas deixava o jazigo preso em "ocupada" — e o próximo
+ * sepultamento era recusado. Agora a ocupação sempre reflete a realidade:
+ *   - ativos >= capacidade → "ocupada"
+ *   - ativos  < capacidade → "livre"
+ *
+ * Só mexe na dupla automática livre↔ocupada. Status decididos manualmente
+ * (interditada, em_manutencao, em_perpetuidade, reservada) são preservados —
+ * não é papel da ocupação sobrescrever uma interdição.
+ *
+ * @param {object} params
+ * @param {object} [params.grave]  instância de Grave (com `status`) já carregada
+ * @param {string} [params.graveId] alternativa: id do jazigo a carregar
+ * @param {string} params.tenantId
+ * @param {object} [params.transaction]
+ */
+async function syncGraveOccupancy({ grave, graveId, tenantId, transaction } = {}) {
+  const g = grave || (graveId
+    ? await Grave.findOne({
+      where: { id: graveId, tenantId },
+      include: [{ model: GraveStatus, as: 'status' }],
+      transaction,
+    })
+    : null);
+  if (!g) return;
+
+  const currentSlug = g.status?.slug;
+  const AUTO = new Set(['livre', 'ocupada']);
+  if (currentSlug && !AUTO.has(currentSlug)) return; // status manual: não mexe
+
+  const capacity = g.capacity || 1;
+  const active = await Burial.count({
+    where: { tenantId, graveId: g.id, status: 'ativo' }, transaction,
+  });
+
+  const alvo = active >= capacity ? 'ocupada' : 'livre';
+  if (currentSlug === alvo) return; // já está certo
+
+  const status = await graveStatuses.resolve(tenantId, { slug: alvo });
+  await g.update({ statusId: status.id }, { transaction });
+}
+
+module.exports = { assertGraveAcceptsBurial, syncGraveOccupancy };

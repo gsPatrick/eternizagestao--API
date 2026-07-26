@@ -885,9 +885,48 @@ function toResponse(doc) {
  * falta de Chromium: o provider degrada para o fallback (PDF simples válido).
  * @returns {Promise<{ buffer: Buffer, document: Document }>}
  */
+// (RE)CONSTRÓI o HTML branded de um documento OFICIAL já emitido a partir do
+// dado ATUAL do cadastro — mesmo layout/número da emissão. Devolve `null` para
+// documentos que usam template customizado (cujos dados livres não são
+// persistidos na linha do Document): esses continuam servidos pelo snapshot.
+//
+// É o coração da geração ON-THE-FLY: como o contexto oficial deriva 100% de
+// graveId/referenceId/documentType, o PDF sempre reflete o cadastro corrente e
+// um HTML legado salvo errado (ex.: certidão que ficou com corpo de óbito) passa
+// a sair correto — sem apagar e reemitir.
+async function buildDocumentHtml(document) {
+  const usedOfficial = !document.templateId
+    && officialTemplates.OFFICIAL_TYPES.includes(document.documentType);
+  if (!usedOfficial) return null;
+
+  const brand = await buildBrandContext(document.tenantId);
+  const ctx = await buildOfficialContext({
+    tenantId: document.tenantId,
+    documentType: document.documentType,
+    graveId: document.graveId,
+    referenceType: document.referenceType,
+    referenceId: document.referenceId,
+    brand,
+    issuedAt: document.issuedAt || new Date(),
+    formattedNumber: document.formattedNumber,
+  });
+  return officialTemplates.renderOfficial(document.documentType, ctx);
+}
+
 async function getOrCreatePdf(tenantId, id) {
   const document = await Document.findOne({ where: { id, tenantId } });
   if (!document) throw AppError.notFound('Documento não encontrado.');
+
+  // DOCUMENTOS OFICIAIS (autorização de sepultamento, certidão de perpetuidade):
+  // gerados SEMPRE na hora, do dado ATUAL, mantendo o mesmo número. Uma alteração
+  // cadastral aparece no próximo download sem o retrabalho de apagar+reemitir; e
+  // um legado com HTML salvo errado passa a sair correto. Não cacheia — a fonte
+  // de verdade é o cadastro, não um arquivo congelado.
+  const freshHtml = await buildDocumentHtml(document);
+  if (freshHtml) {
+    const buffer = await pdf.htmlToPdf(freshHtml, { format: PDF_FORMAT });
+    return { buffer, document };
+  }
 
   // Já existe o PDF armazenado (local) → serve direto. EXCETO se o armazenado
   // for o DEGRADADO (fallback) e o driver fiel já estiver disponível: aí vale

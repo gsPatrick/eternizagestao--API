@@ -259,6 +259,9 @@ async function list(tenantId, query) {
 
   const data = rows.map((g) => {
     const json = g.toJSON();
+    // Assina a foto para exibição imediata (<img>) — o editar de sepultura mostra
+    // a miniatura da foto já cadastrada em vez de um campo de arquivo vazio.
+    json.photoUrl = signPhoto(g.photoUrl);
     const active = occupancyByGrave[g.id] || 0;
     json.activeBurials = active;
     json.available = Math.max(0, (g.capacity || 0) - active);

@@ -5,6 +5,7 @@ const AppError = require('../../utils/app-error');
 const storage = require('../../providers/storage');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const { combineLocalDateTime } = require('../../utils/date-local');
+const { syncGraveOccupancy } = require('../burials/burials.helper');
 const {
   sequelize, Deceased, Burial, Grave, GraveStatus, Lot, Street, Block, Cemetery, Document, Schedule,
   Exhumation, RemainsDeposit, OssuaryNiche, Ossuary, Concession, Person,
@@ -362,6 +363,15 @@ async function remove(tenantId, id, { force = false } = {}) {
 
   await sequelize.transaction(async (transaction) => {
     if (force) {
+      // Guarda os jazigos que serão desocupados ANTES de encerrar os sepultamentos,
+      // para recalcular a ocupação de cada um (senão o jazigo fica preso em
+      // "ocupada" e recusa o próximo sepultamento — o bug que o cliente via voltar).
+      const ativos = await Burial.findAll({
+        where: { tenantId, deceasedId: id, status: 'ativo' },
+        attributes: ['graveId'], transaction,
+      });
+      const graveIds = [...new Set(ativos.map((b) => b.graveId).filter(Boolean))];
+
       await Burial.update(
         { status: 'transladado' },
         { where: { tenantId, deceasedId: id, status: 'ativo' }, transaction }
@@ -371,6 +381,11 @@ async function remove(tenantId, id, { force = false } = {}) {
         { where: { tenantId, deceasedId: id, status: 'depositado' }, transaction }
       );
       await deceased.update({ currentGraveId: null }, { transaction });
+
+      // Desocupa cada jazigo afetado (volta a "livre" se não sobrou ninguém ativo).
+      for (const graveId of graveIds) {
+        await syncGraveOccupancy({ graveId, tenantId, transaction });
+      }
     }
     await deceased.destroy({ transaction }); // soft delete
   });

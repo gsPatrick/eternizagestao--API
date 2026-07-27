@@ -45,7 +45,7 @@ const removeRelationship = catchAsync(async (req, res) => {
 });
 
 const invitePortal = catchAsync(async (req, res) => {
-  const data = pick(req.body, ['email']);
+  const data = pick(req.body, ['email', 'password']);
   return created(res, await service.invitePortal(getTenantId(req), req.params.id, data));
 });
 

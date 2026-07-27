@@ -5,8 +5,8 @@ const { Op, fn, col, literal } = require('sequelize');
 const AppError = require('../../utils/app-error');
 const storage = require('../../providers/storage');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
-const { randomToken } = require('../../utils/password');
-const { portalActivationUrl } = require('../../utils/tenant-url');
+const { randomToken, hashPassword } = require('../../utils/password');
+const { portalActivationUrl, portalBaseUrl } = require('../../utils/tenant-url');
 const {
   Person, PersonRelationship, Concession, Grave,
   FamilyPortalAccount, MaintenanceFee, Tenant, Deceased, Burial,
@@ -311,7 +311,13 @@ async function removeRelationship(tenantId, personId, relationshipId) {
 // Convite: cria/reativa a conta em 'pendente_ativacao' com token de ativação de
 // uso único (apenas o HASH é persistido; o token cru fica a cargo do provider de
 // notificação — nunca retornado). Espelha o fluxo do family-portal.service.
-async function invitePortal(tenantId, personId, { email } = {}) {
+// Dá acesso ao Portal da Família de duas formas (mesma escolha das contas do
+// painel/cidade):
+//   - E-MAIL (sem password): cria a conta 'pendente_ativacao' e manda o link;
+//     a pessoa define a própria senha ao ativar.
+//   - SENHA (com password): quem convida DEFINE a senha agora → a conta nasce
+//     'ativo', não manda e-mail e devolve `credentials` para copiar e repassar.
+async function invitePortal(tenantId, personId, { email, password } = {}) {
   const person = await Person.findOne({ where: { id: personId, tenantId } });
   if (!person) throw AppError.notFound('Pessoa não encontrada.');
 
@@ -320,12 +326,38 @@ async function invitePortal(tenantId, personId, { email } = {}) {
     throw AppError.badRequest('Pessoa sem e-mail — informe um e-mail para o convite do portal.', 'PORTAL_EMAIL_REQUIRED');
   }
 
-  const activationToken = randomToken();
+  const setPassword = password ? String(password) : null;
+  if (setPassword && setPassword.length < 8) {
+    throw AppError.badRequest('A senha deve ter no mínimo 8 caracteres.', 'WEAK_PASSWORD');
+  }
+
   let account = await FamilyPortalAccount.scope('withSecrets').findOne({ where: { tenantId, personId } });
+  if (account && account.status === 'ativo') {
+    throw AppError.conflict('Pessoa já possui acesso ativo ao portal.', 'PORTAL_ALREADY_ACTIVE');
+  }
+
+  // Tenant p/ derivar o LINK branded (subdomínio da cidade); null → fallback global.
+  const tenant = await Tenant.findByPk(tenantId, { attributes: ['id', 'subdomain'] }).catch(() => null);
+
+  // MODO SENHA: conta já ativa, sem e-mail, devolve credenciais para copiar.
+  if (setPassword) {
+    const patch = {
+      email: targetEmail,
+      status: 'ativo',
+      passwordHash: await hashPassword(setPassword),
+      activationToken: null,
+    };
+    if (account) await account.update(patch);
+    else account = await FamilyPortalAccount.create({ tenantId, personId, ...patch });
+    return {
+      id: account.id, personId, email: account.email, status: account.status, since: account.createdAt,
+      credentials: { email: targetEmail, password: setPassword, loginUrl: portalBaseUrl(tenant) },
+    };
+  }
+
+  // MODO E-MAIL: conta pendente + link de ativação (a pessoa cria a senha).
+  const activationToken = randomToken();
   if (account) {
-    if (account.status === 'ativo') {
-      throw AppError.conflict('Pessoa já possui acesso ativo ao portal.', 'PORTAL_ALREADY_ACTIVE');
-    }
     await account.update({ email: targetEmail, status: 'pendente_ativacao', activationToken: hashToken(activationToken) });
   } else {
     account = await FamilyPortalAccount.create({
@@ -333,9 +365,6 @@ async function invitePortal(tenantId, personId, { email } = {}) {
       status: 'pendente_ativacao', activationToken: hashToken(activationToken),
     });
   }
-
-  // Tenant p/ derivar o LINK branded (subdomínio da cidade); null → fallback global.
-  const tenant = await Tenant.findByPk(tenantId, { attributes: ['id', 'subdomain'] }).catch(() => null);
 
   // Envio do link de ativação via FILA (não bloqueia/derruba o convite).
   await sendActivationEmail({ tenantId, tenant, person, email: targetEmail, rawToken: activationToken });

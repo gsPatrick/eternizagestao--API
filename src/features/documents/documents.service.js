@@ -241,7 +241,13 @@ async function buildOfficialContext(
     }).catch(() => null); // associação 'declarant' pode não existir — degrada sem quebrar
   }
 
-  // Relação de sepultados do jazigo (unidade + gavetas filhas), sepultamentos ativos.
+  // Relação de sepultados do jazigo (unidade + gavetas filhas).
+  //
+  // Fonte 1: sepultamentos ATIVOS (fluxo normal).
+  // Fonte 2 (FALLBACK): sepultados ligados ao jazigo por `currentGraveId` SEM
+  //   sepultamento ativo — dados migrados/antigos que nunca ganharam um Burial
+  //   'ativo'. Sem isto a certidão saía "Nenhum sepultado registrado neste
+  //   jazigo" mesmo com o sepultado existindo (bug do cliente na "Maria Milza").
   let deceasedList = [];
   if (graveId) {
     const children = await Grave.findAll({ where: { parentGraveId: graveId, tenantId }, attributes: ['id'], transaction });
@@ -252,12 +258,26 @@ async function buildOfficialContext(
       order: [['burialDate', 'DESC']],
       transaction,
     });
-    deceasedList = burials.map((bu) => ({
-      name: bu.deceased?.fullName,
-      cpf: bu.deceased?.cpf,
-      burialDate: bu.burialDate,
-      deathDate: bu.deceased?.deathDate,
-    }));
+    const porDeceased = new Map();
+    for (const bu of burials) {
+      if (!bu.deceased) continue;
+      porDeceased.set(bu.deceased.id, {
+        name: bu.deceased.fullName,
+        cpf: bu.deceased.cpf,
+        burialDate: bu.burialDate,
+        deathDate: bu.deceased.deathDate,
+      });
+    }
+    const soltos = await Deceased.findAll({
+      where: { tenantId, currentGraveId: graveIds },
+      attributes: ['id', 'fullName', 'cpf', 'deathDate'],
+      transaction,
+    });
+    for (const d of soltos) {
+      if (porDeceased.has(d.id)) continue;
+      porDeceased.set(d.id, { name: d.fullName, cpf: d.cpf, burialDate: null, deathDate: d.deathDate });
+    }
+    deceasedList = [...porDeceased.values()];
   }
 
   // Responsável: autorização → declarante do sepultamento (se houver); senão o

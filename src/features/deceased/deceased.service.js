@@ -284,10 +284,40 @@ async function update(tenantId, id, data) {
     if (data.burialDate !== undefined) patchBurial.burialDate = data.burialDate;
     if (data.burialTime !== undefined) patchBurial.burialTime = data.burialTime || null;
     if (Object.keys(patchBurial).length) {
-      await Burial.update(patchBurial, {
+      const [afetados] = await Burial.update(patchBurial, {
         where: { tenantId, deceasedId: id, status: 'ativo' },
         transaction,
       });
+      // Sem sepultamento ATIVO (registro migrado/antigo): antes o "Salvar" não
+      // gravava nada — a data de sepultamento não tem onde morar sem um Burial.
+      // Então, se o sepultado ESTÁ num jazigo, reaproveitamos o sepultamento
+      // daquele jazigo (reativando-o) ou criamos um; assim a data persiste e o
+      // registro volta a ser consistente (listagem, certidão e documento).
+      if (afetados === 0) {
+        const graveId = (novaSepultura ? data.currentGraveId : deceased.currentGraveId)
+          || deceased.currentGraveId || null;
+        if (graveId) {
+          const existente = await Burial.findOne({
+            where: { tenantId, deceasedId: id, graveId },
+            order: [['createdAt', 'DESC']],
+            transaction,
+          });
+          if (existente) {
+            await existente.update({ ...patchBurial, status: 'ativo' }, { transaction });
+          } else {
+            const grave = await Grave.findOne({ where: { id: graveId, tenantId }, transaction });
+            await Burial.create({
+              tenantId,
+              cemeteryId: grave?.cemeteryId || null,
+              graveId,
+              deceasedId: id,
+              status: 'ativo',
+              burialDate: patchBurial.burialDate ?? null,
+              burialTime: patchBurial.burialTime ?? null,
+            }, { transaction });
+          }
+        }
+      }
     }
   });
 

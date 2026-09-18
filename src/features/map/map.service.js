@@ -159,10 +159,33 @@ async function updateOrthophoto(tenantId, id, data) {
   return serializeOrthophoto(ortho);
 }
 
+// fileUrl (/files/<tenant>/<arquivo>) → storagePath (<tenant>/<arquivo>), que é o
+// que o provider de storage espera em deleteFile. URLs externas não têm arquivo
+// local para apagar.
+function storagePathFromFileUrl(fileUrl) {
+  const p = String(fileUrl || '');
+  if (!p || /^(https?:)?\/\//i.test(p) || p.startsWith('data:')) return null;
+  const prefix = `${storage.PUBLIC_PREFIX}/`;
+  const rel = (p.startsWith(prefix) ? p.slice(prefix.length) : p).replace(/^\/+/, '');
+  return rel || null;
+}
+
 async function removeOrthophoto(tenantId, id) {
   const ortho = await Orthophoto.findOne({ where: { id, tenantId } });
   if (!ortho) throw AppError.notFound('Ortofoto não encontrada.');
+  const storagePath = storagePathFromFileUrl(ortho.fileUrl);
   await ortho.destroy();
+  // A UI promete que "o arquivo é removido" — sem isto, o envio errado saía da
+  // lista mas continuava ocupando o volume para sempre. Best-effort: falhar ao
+  // apagar o arquivo NÃO pode desfazer nem mascarar a remoção do registro, que
+  // é o que o operador realmente pediu.
+  if (storagePath) {
+    try {
+      await storage.deleteFile(storagePath);
+    } catch (err) {
+      console.warn(`[map] ortofoto ${id} removida, mas o arquivo ${storagePath} não pôde ser apagado:`, err.message);
+    }
+  }
 }
 
 // Contexto do mapa: centro do cemitério (entrada GPS) + ortofoto ativa + bounds.

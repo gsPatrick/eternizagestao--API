@@ -29,6 +29,19 @@ function signLogo(logoUrl) {
   return logoUrl ? storage.signedUrl(logoUrl, { ttlSeconds: LOGO_URL_TTL_SECONDS }) : logoUrl;
 }
 
+// Campos de IMAGEM do tenant: o valor gravado é sempre o CRU (/files/...), nunca
+// a URL assinada que o painel recebeu para exibir.
+const IMAGE_FIELDS = ['logoUrl', 'heroImageUrl', 'footerImageUrl'];
+
+// Devolve uma cópia dos dados com os campos de imagem sem assinatura (?token&exp).
+function normalizeImageFields(data = {}) {
+  const out = { ...data };
+  for (const f of IMAGE_FIELDS) {
+    if (out[f] !== undefined) out[f] = storage.rawFileUrl(out[f]);
+  }
+  return out;
+}
+
 const EDITABLE_FIELDS = [
   'name', 'legalName', 'cnpj', 'logoUrl', 'primaryColor', 'secondaryColor',
   'email', 'phone', 'whatsapp', 'addressStreet', 'addressNumber', 'addressComplement',
@@ -89,6 +102,11 @@ function serialize(tenant) {
     // imagens da página pública da cidade (assinadas p/ exibição no painel)
     heroImageUrl: signLogo(t.heroImageUrl),
     footerImageUrl: signLogo(t.footerImageUrl),
+    // Valores CRUS (sem assinatura) — o front guarda estes no formulário e os
+    // devolve no PATCH; as versões assinadas acima servem só para o <img>.
+    logoUrlRaw: t.logoUrl || null,
+    heroImageUrlRaw: t.heroImageUrl || null,
+    footerImageUrlRaw: t.footerImageUrl || null,
     primaryColor: t.primaryColor,
     secondaryColor: t.secondaryColor,
     email: t.email,
@@ -228,8 +246,9 @@ async function create(payload = {}, actor = {}) {
   const tenantData = { name: tenantInput.name, subdomain, active: true };
   if (mode === 'completo') {
     // super_admin já configura tudo → grava marca/config e conclui o onboarding.
+    const config = normalizeImageFields(tenantInput);
     for (const f of TENANT_CONFIG_FIELDS) {
-      if (tenantInput[f] !== undefined) tenantData[f] = tenantInput[f];
+      if (config[f] !== undefined) tenantData[f] = config[f];
     }
     tenantData.name = tenantInput.name; // garante que config não sobrescreva
     tenantData.onboardingStatus = 'concluido';
@@ -315,7 +334,7 @@ async function create(payload = {}, actor = {}) {
 async function update(id, data) {
   const tenant = await getById(id);
   // subdomínio é imutável após criação — quebra de URL dos clientes
-  return serialize(await tenant.update(data));
+  return serialize(await tenant.update(normalizeImageFields(data)));
 }
 
 async function remove(id) {
@@ -394,7 +413,9 @@ async function updateOnboarding(tenantId, data = {}) {
 
   const patch = {};
   for (const f of ONBOARDING_FIELDS) {
-    if (data[f] !== undefined) patch[f] = data[f];
+    if (data[f] === undefined) continue;
+    // Imagens: o painel pode devolver a URL ASSINADA que recebeu — grava o CRU.
+    patch[f] = IMAGE_FIELDS.includes(f) ? storage.rawFileUrl(data[f]) : data[f];
   }
   if (data.name !== undefined && data.name !== null && data.name !== '') {
     patch.name = data.name;
@@ -442,8 +463,10 @@ async function uploadLogo(tenantId, { contentBase64, fileName, mimeType } = {}) 
   });
 
   await tenant.update({ logoUrl: saved.fileUrl });
-  // Devolve ASSINADA (TTL longo) — o painel exibe a logo recém-enviada via <img>.
-  return { logoUrl: signLogo(saved.fileUrl) };
+  // Devolve ASSINADA (TTL longo) — o painel exibe a logo recém-enviada via <img>
+  // — e também o valor CRU (fileUrl/logoUrlRaw), que é o que o form deve guardar
+  // e devolver no PATCH. Quem só lê `logoUrl` continua funcionando.
+  return { logoUrl: signLogo(saved.fileUrl), logoUrlRaw: saved.fileUrl, fileUrl: saved.fileUrl };
 }
 
 /**
@@ -477,7 +500,8 @@ async function uploadPublicImage(tenantId, kind, { contentBase64, fileName, mime
   });
 
   await tenant.update({ [field]: saved.fileUrl });
-  return { [field]: signLogo(saved.fileUrl) };
+  // Assinada para o preview + CRUA (<campo>Raw/fileUrl) para o form gravar.
+  return { [field]: signLogo(saved.fileUrl), [`${field}Raw`]: saved.fileUrl, fileUrl: saved.fileUrl };
 }
 
 // ---------------------------------------------------------------------------

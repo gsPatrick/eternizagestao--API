@@ -101,9 +101,30 @@ if (!driver) throw new Error(`STORAGE_DRIVER desconhecido: ${driverName}`);
 
 /* ============================ URLs assinadas ============================ */
 
+/**
+ * Remove a ASSINATURA (?token=...&exp=... e qualquer #fragmento) de um fileUrl,
+ * devolvendo o valor CRU — que é o único formato que pode ser PERSISTIDO.
+ *
+ * Existe porque o painel recebe a URL já assinada (para exibir a imagem) e a
+ * devolve no PATCH; gravar isso fazia a leitura assinar POR CIMA
+ * (/files/x.jpg?token=A&exp=B?token=C&exp=D), a validação falhar e a miniatura
+ * quebrar com 403. Use SEMPRE ao gravar um caminho de arquivo vindo do cliente.
+ * URLs externas (http/https) e data: passam intactas.
+ */
+function rawFileUrl(fileUrl) {
+  if (!fileUrl) return fileUrl;
+  const s = String(fileUrl);
+  if (s.startsWith('data:')) return s;
+  const cut = Math.min(
+    ...['?', '#'].map((c) => (s.indexOf(c) === -1 ? s.length : s.indexOf(c)))
+  );
+  return s.slice(0, cut);
+}
+
 // Reduz um fileUrl (/files/<tenant>/<arquivo>) ao caminho relativo (<tenant>/<arquivo>).
+// Corta query/fragmento: NENHUM caminho relativo pode carregar ?token=/&exp=.
 function relFromFileUrl(fileUrl) {
-  let p = String(fileUrl || '');
+  let p = rawFileUrl(String(fileUrl || ''));
   if (p.startsWith(`${PUBLIC_PREFIX}/`)) p = p.slice(PUBLIC_PREFIX.length + 1);
   else if (p.startsWith(PUBLIC_PREFIX)) p = p.slice(PUBLIC_PREFIX.length);
   return p.replace(/^\/+/, '');
@@ -181,6 +202,7 @@ module.exports = {
   PUBLIC_PREFIX,
   DEFAULT_TTL_SECONDS,
   signedUrl,
+  rawFileUrl,
   verifySignedUrl,
   readLocalFile,
   localPathFromUrl,

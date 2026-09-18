@@ -6,6 +6,7 @@ const storage = require('../../providers/storage');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const { combineLocalDateTime } = require('../../utils/date-local');
 const { syncGraveOccupancy } = require('../burials/burials.helper');
+const { ensureBurialSchedule } = require('../burials/burials.service');
 const {
   sequelize, Deceased, Burial, Grave, GraveStatus, Lot, Street, Block, Cemetery, Document, Schedule,
   Exhumation, RemainsDeposit, OssuaryNiche, Ossuary, Concession, Person,
@@ -327,13 +328,26 @@ async function update(tenantId, id, data) {
   if (data.burialDate !== undefined || data.burialTime !== undefined || novaSepultura) {
     const ativo = await Burial.findOne({ where: { tenantId, deceasedId: id, status: 'ativo' } });
     if (ativo && ativo.burialDate) {
-      const startsAt = combineLocalDateTime(ativo.burialDate, ativo.burialTime || '09:00');
-      if (startsAt) {
-        const endsAt = new Date(startsAt.getTime() + 60 * 60000);
-        const evento = await Schedule.findOne({
-          where: { tenantId, scheduleType: 'sepultamento', deceasedId: id },
+      // Atualiza o evento existente OU CRIA, se o sepultamento nasceu sem ele
+      // (cadastro antigo/sem data) — senão o sepultado ficaria para sempre fora
+      // da agenda pública. Reusa a regra de fuso/idempotência de burials.
+      const evento = await Schedule.findOne({
+        where: { tenantId, scheduleType: 'sepultamento', deceasedId: id },
+      });
+      if (evento) {
+        const startsAt = combineLocalDateTime(ativo.burialDate, ativo.burialTime || '09:00');
+        if (startsAt) {
+          await evento.update({
+            startsAt,
+            endsAt: new Date(startsAt.getTime() + 60 * 60000),
+            graveId: ativo.graveId,
+            cemeteryId: ativo.cemeteryId || evento.cemeteryId,
+          });
+        }
+      } else {
+        await ensureBurialSchedule(tenantId, ativo, null).catch((err) => {
+          console.error('[deceased] criação do evento de agenda falhou:', err.message);
         });
-        if (evento) await evento.update({ startsAt, endsAt, graveId: ativo.graveId });
       }
     }
   }

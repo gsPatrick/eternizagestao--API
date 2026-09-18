@@ -23,6 +23,15 @@ router.get(
   controller.listCemeteries
 );
 
+// Agenda pública da CIDADE: sem :cemeteryId agrega todos os cemitérios do
+// tenant (ou filtra por ?cemeteryId=). Tenant OBRIGATÓRIO.
+router.get(
+  '/agenda',
+  limiter,
+  tenantResolver({ required: true }),
+  controller.cemeteryAgenda
+);
+
 // Agenda pública do cemitério: tenant OBRIGATÓRIO (X-Tenant-Subdomain / subdomínio).
 router.get(
   '/cemeteries/:cemeteryId/agenda',

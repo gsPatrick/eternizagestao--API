@@ -3,6 +3,7 @@
 const { Op } = require('sequelize');
 const { Tenant, Cemetery, Schedule, Chapel, Deceased, Grave } = require('../../models');
 const storage = require('../../providers/storage');
+const { startOfTodayInTZ, combineLocalDateTime } = require('../../utils/date-local');
 
 // Logo local (/files/...) → URL assinada (TTL longo, branding); http externa passa direto.
 function signLogo(logoUrl) {
@@ -66,28 +67,58 @@ function toPublicAgendaItem(schedule) {
     dateTime: schedule.startsAt,
     place: resolvePlace(schedule),
     deceasedName: schedule.deceased?.fullName || null,
+    // Qual cemitério — a agenda pode agregar TODOS os cemitérios da cidade.
+    cemeteryId: schedule.cemeteryId,
+    cemeteryName: schedule.cemetery?.name || null,
   };
 }
 
-// Agenda PÚBLICA de um cemitério: próximos velórios/sepultamentos/exumações,
-// somente campos não sensíveis, ordenados por data. Isolamento multi-tenant
-// garantido pelo tenantId (resolvido do subdomínio) + cemeteryId.
-async function cemeteryAgenda(tenantId, cemeteryId, { limit = 30 } = {}) {
+const AGENDA_DEFAULT_LIMIT = 200;
+const AGENDA_MAX_LIMIT = 500;
+
+/**
+ * Agenda PÚBLICA: próximos velórios/sepultamentos/exumações, somente campos não
+ * sensíveis, ordenados por data. Isolamento multi-tenant garantido pelo tenantId
+ * (resolvido do subdomínio).
+ *
+ * `cemeteryId` é OPCIONAL: sem ele a agenda agrega TODOS os cemitérios do tenant
+ * (cada item carrega o cemitério a que pertence) — um sepultamento marcado num
+ * cemitério que não é o primeiro da cidade também precisa aparecer.
+ *
+ * CORTE POR DIA, NÃO POR INSTANTE: o corte é a MEIA-NOITE de hoje no fuso de
+ * operação. Usar `new Date()` fazia o sepultamento cadastrado no mesmo dia, mas
+ * com horário já passado (ex.: 08:00, ou a hora padrão 09:00), nascer "vencido"
+ * e sumir do portal — exatamente o bug relatado pelo cliente. Aceita ainda uma
+ * janela opcional from/to (YYYY-MM-DD ou ISO) e paginação por limit/offset.
+ */
+async function cemeteryAgenda(tenantId, cemeteryId, { from, to, limit, offset } = {}) {
+  const startsAt = {};
+  startsAt[Op.gte] = from ? combineLocalDateTime(from, '00:00') || startOfTodayInTZ() : startOfTodayInTZ();
+  // `to` é inclusivo no DIA: 23:59 do dia informado, no fuso de operação.
+  if (to) {
+    const fim = combineLocalDateTime(to, '23:59');
+    if (fim) startsAt[Op.lte] = fim;
+  }
+
+  const where = {
+    tenantId,
+    scheduleType: { [Op.in]: PUBLIC_SCHEDULE_TYPES },
+    status: { [Op.notIn]: ['cancelado'] },
+    startsAt,
+  };
+  if (cemeteryId) where.cemeteryId = cemeteryId;
+
   const schedules = await Schedule.findAll({
-    where: {
-      tenantId,
-      cemeteryId,
-      scheduleType: { [Op.in]: PUBLIC_SCHEDULE_TYPES },
-      status: { [Op.notIn]: ['cancelado'] },
-      startsAt: { [Op.gte]: new Date() },
-    },
+    where,
     include: [
+      { model: Cemetery, as: 'cemetery', attributes: ['id', 'name'], required: false },
       { model: Chapel, as: 'chapel', attributes: ['id', 'name'], required: false },
       { model: Grave, as: 'grave', attributes: ['id', 'code'], required: false },
       { model: Deceased, as: 'deceased', attributes: ['id', 'fullName'], required: false },
     ],
     order: [['startsAt', 'ASC']],
-    limit: Math.min(Number(limit) || 30, 30),
+    limit: Math.min(Math.max(Number(limit) || AGENDA_DEFAULT_LIMIT, 1), AGENDA_MAX_LIMIT),
+    offset: Math.max(Number(offset) || 0, 0),
   });
 
   return schedules.map(toPublicAgendaItem);

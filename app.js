@@ -254,6 +254,29 @@ if (require.main === module) {
     }
   }
 
+  // CORREÇÃO DE DADOS das imagens da cidade: as URLs de logo/topo/rodapé que o
+  // painel salvou com a assinatura junto (?token=...&exp=...) ficam inválidas na
+  // leitura — a imagem volta 403 e aparece quebrada no painel e na landing. O
+  // código já não grava mais assim; isto conserta o que JÁ está no banco, para o
+  // cliente não precisar rodar nada à mão: o próprio deploy resolve.
+  // É uma varredura barata (uma linha por cidade) e idempotente — nas próximas
+  // subidas não encontra nada e não escreve. Desligue com FIX_IMAGE_URLS=false.
+  async function runTenantImageUrlFix() {
+    if (process.env.FIX_IMAGE_URLS === 'false') return;
+    try {
+      const { fixTenantImageUrls } = require('./scripts/fix-tenant-image-urls');
+      const r = await fixTenantImageUrls({ verbose: false });
+      if (r.campos) {
+        console.log(
+          `[boot] imagens das cidades: ${r.campos} URL(s) corrigida(s) `
+          + `em ${r.corrigidos} cidade(s).`
+        );
+      }
+    } catch (err) {
+      console.error('[boot] correção das URLs de imagem falhou:', err.message);
+    }
+  }
+
   let server;
   applyMigrations().finally(() => {
     server = app.listen(port, async () => {
@@ -268,6 +291,7 @@ if (require.main === module) {
         console.error('Falha ao conectar no PostgreSQL:', err.message);
       }
       // fora do caminho crítico: a API já está no ar quando isto começa
+      runTenantImageUrlFix();
       runPerpetuityBackfill();
       runBurialAgendaBackfill();
     });

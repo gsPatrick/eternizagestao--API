@@ -39,8 +39,13 @@ const create = catchAsync(async (req, res) => {
 const update = catchAsync(async (req, res) => {
   // Aceita também a LOCALIZAÇÃO (cemitério/quadra/rua/lote): corrigir um
   // cadastro errado não pode exigir apagar e recriar a sepultura.
+  // E o PROPRIETÁRIO/RESPONSÁVEL: o formulário de edição tem o campo, e sem
+  // aceitá-los aqui a escolha era descartada em silêncio (respondia 200 sem
+  // gravar nada). O dono mora em Concession — o service trata a emissão/
+  // transferência pelo fluxo oficial das concessões.
   const data = pick(req.body, [
     ...service.EDITABLE_FIELDS, 'cemeteryId', 'block', 'street', 'lot',
+    'ownerPersonId', 'responsiblePersonId',
   ]);
   return ok(res, await service.update(getTenantId(req), req.params.id, data, getUserId(req)));
 });

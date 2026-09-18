@@ -119,6 +119,9 @@ async function buildListWhere(tenantId, query) {
   if (query.utilizacao) where.utilizacao = { [Op.iLike]: `%${query.utilizacao}%` };
   if (query.blocked !== undefined) where.isBlocked = query.blocked === 'true';
   if (query.onlyRoot === 'true' || query.onlyRoot === true) where.parentGraveId = null;
+  // GAVETAS de um jazigo: o seletor de sepultura precisa listar as filhas para
+  // o operador escolher O NÚMERO DA GAVETA (a gaveta É uma Grave, com `code`).
+  if (query.parentGraveId) where.parentGraveId = query.parentGraveId;
 
   // busca livre: código OU nome do concessionário titular OU nome do SEPULTADO
   const term = query.search || query.code;
@@ -220,6 +223,9 @@ async function list(tenantId, query) {
     include: [
       { model: GraveStatus, as: 'status' },
       { model: Cemetery, as: 'cemetery', attributes: ['id', 'name'] },
+      // Jazigo PAI quando a linha é uma gaveta — a gaveta herda quadra/lote do
+      // pai, então sem isto ela aparece idêntica ao jazigo na listagem.
+      { model: Grave, as: 'parentGrave', attributes: ['id', 'code', 'unitType'], required: false },
       lotInclude(query),
     ],
   });
@@ -230,7 +236,19 @@ async function list(tenantId, query) {
   const occupancyByGrave = {};
   const ownerByGrave = {};
   const occupantsByGrave = {};
+  // Quantas GAVETAS cada sepultura tem: o seletor do sepultado só pede o
+  // "Número da gaveta" quando existem filhas — sem isso a tela teria que
+  // consultar uma a uma.
+  const childCountByGrave = {};
   if (ids.length) {
+    const children = await Grave.findAll({
+      where: { tenantId, parentGraveId: { [Op.in]: ids } },
+      attributes: ['parentGraveId', [sequelize.fn('COUNT', sequelize.col('id')), 'total']],
+      group: ['parentGraveId'],
+      raw: true,
+    });
+    children.forEach((c) => { childCountByGrave[c.parentGraveId] = Number(c.total); });
+
     const counts = await Burial.findAll({
       where: { tenantId, graveId: { [Op.in]: ids }, status: 'ativo' },
       attributes: ['graveId', [sequelize.fn('COUNT', sequelize.col('id')), 'total']],
@@ -268,6 +286,7 @@ async function list(tenantId, query) {
     json.occupancy = `${active}/${g.capacity || 0}`;
     json.isMapped = Boolean(g.geoPolygon);
     json.occupants = occupantsByGrave[g.id] || [];
+    json.childCount = childCountByGrave[g.id] || 0;
     const owner = ownerByGrave[g.id];
     json.owner = owner ? { concessionId: owner.id, person: owner.person } : null;
     return json;
@@ -552,9 +571,122 @@ async function update(tenantId, id, data, userId) {
   }
 
   await grave.update(campos);
-  // Passou a ser PERPÉTUA na edição → emite a certidão (se ainda não houver).
+
+  // PROPRIETÁRIO escolhido na edição (o dono vive em Concession, não em Grave).
+  const resultadoDono = await aplicarProprietario(tenantId, grave, data, userId);
+
+  // Passou a ser PERPÉTUA na edição (ou ganhou dono agora) → garante a certidão.
   await tryPerpetuityCertificate(tenantId, grave, userId);
-  return grave;
+
+  // Devolve a sepultura JÁ com o proprietário vigente: a tela reflete a troca
+  // na hora, sem depender de um GET extra.
+  const json = grave.toJSON();
+  json.owner = await ownerOf(tenantId, grave.id);
+  if (resultadoDono) json.ownerChange = resultadoDono;
+  return json;
+}
+
+/** Concessão ATIVA do jazigo, no formato usado pela listagem ({ concessionId, person }). */
+async function ownerOf(tenantId, graveId) {
+  const c = await Concession.findOne({
+    where: { tenantId, graveId, status: 'ativa' },
+    include: [{ model: Person, as: 'person', attributes: ['id', 'fullName', 'cpf', 'phonePrimary'] }],
+  });
+  return c ? { concessionId: c.id, person: c.person } : null;
+}
+
+/**
+ * Aplica o PROPRIETÁRIO informado na edição da sepultura.
+ *
+ * Regras (sempre pelo fluxo oficial das concessões, para a certidão de
+ * perpetuidade e o histórico de titulares saírem corretos):
+ *  - sem concessão ativa + veio proprietário → EMITE (concessions.issue), o
+ *    mesmo caminho do cadastro;
+ *  - concessão ativa e o proprietário MUDOU → TRANSFERE (concessions.transfer):
+ *    a anterior vira 'transferida', nasce a nova e fica o ConcessionTransfer no
+ *    histórico. Motivo 'regularizacao' — é uma correção de cadastro feita na
+ *    tela de sepulturas, não uma venda/herança declarada;
+ *  - veio VAZIO com concessão ativa → NÃO apaga nada. Encerrar uma concessão é
+ *    ato administrativo (rescisão) e tem tela própria; um campo em branco no
+ *    formulário não pode revogar a titularidade de um jazigo em silêncio. Só
+ *    relatamos o que foi ignorado.
+ *
+ * Best-effort: a sepultura já foi gravada e não é desfeita se a concessão
+ * falhar — o erro volta em `ownerChange` e fica na auditoria.
+ */
+async function aplicarProprietario(tenantId, grave, data, userId) {
+  if (data.ownerPersonId === undefined && data.responsiblePersonId === undefined) return null;
+
+  const novoDono = data.ownerPersonId || null;
+  const ativa = await Concession.findOne({ where: { tenantId, graveId: grave.id, status: 'ativa' } });
+  const concessions = require('../concessions/concessions.service');
+
+  try {
+    if (!novoDono) {
+      if (!ativa) return { acao: 'nenhuma' };
+      return {
+        acao: 'ignorado',
+        motivo: 'Proprietário em branco não encerra a concessão ativa. Use a rescisão da concessão.',
+      };
+    }
+
+    const tipo = isPerpetualUse(grave.utilizacao) ? 'perpetua' : 'temporaria';
+
+    if (!ativa) {
+      const nova = await concessions.issue(
+        tenantId, grave.id,
+        {
+          personId: novoDono,
+          responsiblePersonId: data.responsiblePersonId || null,
+          concessionType: tipo,
+        },
+        userId
+      );
+      return { acao: 'emitida', concessionId: nova.id };
+    }
+
+    if (ativa.personId !== novoDono) {
+      const { concession } = await concessions.transfer(
+        tenantId, ativa.id,
+        {
+          toPersonId: novoDono,
+          transferReason: 'regularizacao',
+          concessionType: tipo,
+          notes: 'Troca de proprietário pela edição da sepultura.',
+        },
+        userId
+      );
+      if (data.responsiblePersonId !== undefined) {
+        await concession.update({ responsiblePersonId: data.responsiblePersonId || null });
+      }
+      return { acao: 'transferida', concessionId: concession.id, deId: ativa.personId };
+    }
+
+    // Mesmo proprietário: só o responsável pode ter mudado.
+    if (data.responsiblePersonId !== undefined
+      && (ativa.responsiblePersonId || null) !== (data.responsiblePersonId || null)) {
+      await ativa.update({ responsiblePersonId: data.responsiblePersonId || null });
+      await graveEvents.record({
+        tenantId, graveId: grave.id, eventType: 'concessao',
+        title: 'Responsável pela sepultura atualizado',
+        referenceType: 'concession', referenceId: ativa.id,
+        metadata: { responsiblePersonId: data.responsiblePersonId || null },
+        userId,
+      });
+      return { acao: 'responsavel_atualizado', concessionId: ativa.id };
+    }
+    return { acao: 'nenhuma' };
+  } catch (err) {
+    console.error('[graves] troca de proprietário na edição falhou:', err.message, err.stack);
+    audit.record({
+      action: 'edicao',
+      entityType: 'Sepultura',
+      entityId: grave.id,
+      description: `FALHA ao aplicar o proprietário na edição: ${err.message}`,
+      newData: { erro: err.message, ownerPersonId: novoDono },
+    });
+    return { acao: 'falhou', erro: err.message };
+  }
 }
 
 // Mudança de status com registro obrigatório na timeline

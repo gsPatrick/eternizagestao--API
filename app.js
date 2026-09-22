@@ -277,6 +277,44 @@ if (require.main === module) {
     }
   }
 
+  // CORREÇÃO DE DADOS dos códigos de sepultura e gaveta. Mesma lógica do fix de
+  // imagens acima: o cliente não abre terminal no servidor, então o deploy
+  // conserta o que já está gravado.
+  //   - sufixo indevido ("12-12BLOCO18-5" após criar/apagar a mesma sepultura);
+  //   - gaveta com número solto ("18"), que colidia entre blocos diferentes.
+  // Ambos são conservadores (só renomeiam quando o código de destino está LIVRE
+  // entre as ativas) e idempotentes. Desligáveis por env.
+  async function runCodeFixes() {
+    if (process.env.FIX_GRAVE_CODES !== 'false') {
+      try {
+        const { fixGraveCodeSuffixes } = require('./scripts/fix-grave-code-suffixes');
+        const r = await fixGraveCodeSuffixes({ verbose: false });
+        if (r.corrigidas || r.mantidas) {
+          console.log(
+            `[boot] códigos de sepultura: ${r.corrigidas} normalizado(s), `
+            + `${r.mantidas} mantido(s) por já haver outra sepultura com o código base.`
+          );
+        }
+      } catch (err) {
+        console.error('[boot] normalização dos códigos de sepultura falhou:', err.message);
+      }
+    }
+    if (process.env.FIX_DRAWER_CODES !== 'false') {
+      try {
+        const { fixDrawerCodes } = require('./scripts/fix-drawer-codes');
+        const r = await fixDrawerCodes({ verbose: false });
+        if (r.corrigidas || r.mantidas) {
+          console.log(
+            `[boot] códigos de gaveta: ${r.corrigidas} normalizado(s), `
+            + `${r.mantidas} mantido(s) por conflito.`
+          );
+        }
+      } catch (err) {
+        console.error('[boot] normalização dos códigos de gaveta falhou:', err.message);
+      }
+    }
+  }
+
   let server;
   applyMigrations().finally(() => {
     server = app.listen(port, async () => {
@@ -300,6 +338,7 @@ if (require.main === module) {
       server.keepAliveTimeout = Number(process.env.SERVER_KEEPALIVE_TIMEOUT_MS || 75_000);
 
       runTenantImageUrlFix();
+      runCodeFixes();
       runPerpetuityBackfill();
       runBurialAgendaBackfill();
     });

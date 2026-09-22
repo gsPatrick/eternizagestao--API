@@ -219,7 +219,15 @@ async function list(tenantId, query) {
     where,
     limit,
     offset,
-    order: [['code', 'ASC']],
+    // GAVETAS de um bloco: ordena pelo NÚMERO, não pelo texto do código — com
+    // ordem alfabética o seletor listava 1, 10, 11, ..., 2 (o código agora é
+    // <bloco>-G<n>). Só o número final é usado; sem número, vai para o fim.
+    order: query.parentGraveId
+      ? [
+        [sequelize.literal("COALESCE(NULLIF(substring(\"Grave\".\"code\" from '([0-9]+)$'), '')::bigint, 999999999)"), 'ASC'],
+        ['code', 'ASC'],
+      ]
+      : [['code', 'ASC']],
     include: [
       { model: GraveStatus, as: 'status' },
       { model: Cemetery, as: 'cemetery', attributes: ['id', 'name'] },
@@ -287,6 +295,9 @@ async function list(tenantId, query) {
     json.isMapped = Boolean(g.geoPolygon);
     json.occupants = occupantsByGrave[g.id] || [];
     json.childCount = childCountByGrave[g.id] || 0;
+    // Número "de tela" da gaveta (código sem o prefixo do bloco pai): o seletor
+    // "Número da gaveta" e a listagem mostram 18, não 12-12BLOCO01-G18.
+    json.drawerNumber = drawerNumber(g.code, g.parentGrave?.code);
     const owner = ownerByGrave[g.id];
     json.owner = owner ? { concessionId: owner.id, person: owner.person } : null;
     return json;
@@ -437,6 +448,53 @@ async function nextGraveCode(tenantId, lot, transaction) {
   }
 }
 
+/**
+ * CÓDIGO DA GAVETA — precisa carregar o BLOCO PAI.
+ *
+ * O `code` é único por CEMITÉRIO (índice parcial
+ * `graves_cemetery_id_code_active_unique ON graves (cemetery_id, code)
+ * WHERE deleted_at IS NULL`). A tela "Nova gaveta" mandava o número puro
+ * ("18") como código, então a gaveta 18 do bloco 12BLOCO01 colidia com a
+ * gaveta 18 do bloco 12BLOCO15 — "Registro duplicado" num cadastro legítimo.
+ * Cada bloco tem 18 gavetas e o cliente precisa cadastrar milhares delas.
+ *
+ * Formato (o mesmo que já existia nos cadastros antigos, ex.: JAZ-001-G1):
+ *   <código do jazigo/túmulo pai>-G<número>
+ * Como o código do pai já é único no cemitério, a gaveta N passa a existir em
+ * TODOS os blocos sem colidir — e duas gavetas com o mesmo número dentro do
+ * MESMO bloco continuam impossíveis (aí o conflito é correto).
+ */
+function drawerCode(parentCode, numero) {
+  const n = String(numero == null ? '' : numero).trim();
+  if (!n) return null;
+  const prefix = `${parentCode}-G`;
+  // Já veio no formato final (reenvio da tela, importação) → não duplica o prefixo.
+  if (n.toUpperCase().startsWith(prefix.toUpperCase())) return n;
+  return `${prefix}${n}`;
+}
+
+/** Número "de tela" da gaveta: o código sem o prefixo do bloco pai. */
+function drawerNumber(code, parentCode) {
+  if (!code || !parentCode) return null;
+  const prefix = `${parentCode}-G`;
+  return code.toUpperCase().startsWith(prefix.toUpperCase()) ? code.slice(prefix.length) : code;
+}
+
+/** Próximo número livre de gaveta dentro do bloco pai (quando o número não é informado). */
+async function nextDrawerCode(tenantId, parent, transaction) {
+  const irmas = await Grave.findAll({
+    where: { tenantId, parentGraveId: parent.id },
+    attributes: ['code'],
+    raw: true,
+    transaction,
+  });
+  const used = new Set(irmas.map((g) => String(g.code).toUpperCase()));
+  for (let n = 1; ; n += 1) {
+    const candidate = drawerCode(parent.code, n);
+    if (!used.has(candidate.toUpperCase())) return candidate;
+  }
+}
+
 async function create(tenantId, data, userId) {
   const grave = await sequelize.transaction(async (transaction) => {
     // Jazigo pai (gaveta) — validado antes: pode fornecer o LOTE por herança,
@@ -484,21 +542,54 @@ async function create(tenantId, data, userId) {
     // cemitério + quadra + lote — não existe um "código da unidade" para digitar.
     // Derivamos daí e desempatamos com sufixo quando a mesma quadra/lote tem
     // mais de uma sepultura (o código continua ÚNICO por cemitério).
-    if (!graveData.code) {
+    if (parent) {
+      // GAVETA: o operador digita só o NÚMERO — o código final leva o bloco pai
+      // (ver drawerCode). Sem número, pega o próximo livre DO BLOCO.
+      graveData.code = graveData.code
+        ? drawerCode(parent.code, graveData.code)
+        : await nextDrawerCode(tenantId, parent, transaction);
+
+      // Duplicidade DENTRO do mesmo bloco → mensagem que diz qual gaveta e qual
+      // bloco (o 409 genérico "registro duplicado" não dizia nada ao operador).
+      const ja = await Grave.findOne({
+        where: { tenantId, parentGraveId: parent.id, code: graveData.code },
+        transaction,
+      });
+      if (ja) {
+        throw AppError.conflict(
+          `A gaveta ${drawerNumber(graveData.code, parent.code)} já existe no bloco ${parent.code}.`,
+          'DRAWER_ALREADY_EXISTS'
+        );
+      }
+    } else if (!graveData.code) {
       graveData.code = await nextGraveCode(tenantId, lot, transaction);
     }
 
-    const grave = await Grave.create(
-      {
-        tenantId,
-        cemeteryId: lot.cemeteryId,
-        lotId: lot.id,
-        parentGraveId: data.parentGraveId || null,
-        statusId: status.id,
-        ...graveData,
-      },
-      { transaction }
-    );
+    let grave;
+    try {
+      grave = await Grave.create(
+        {
+          tenantId,
+          cemeteryId: lot.cemeteryId,
+          lotId: lot.id,
+          parentGraveId: data.parentGraveId || null,
+          statusId: status.id,
+          ...graveData,
+        },
+        { transaction }
+      );
+    } catch (err) {
+      // Corrida no índice único: mesma mensagem clara do pré-check.
+      if (err.name === 'SequelizeUniqueConstraintError') {
+        throw AppError.conflict(
+          parent
+            ? `A gaveta ${drawerNumber(graveData.code, parent.code)} já existe no bloco ${parent.code}.`
+            : `Já existe uma sepultura com o código ${graveData.code} neste cemitério.`,
+          parent ? 'DRAWER_ALREADY_EXISTS' : 'GRAVE_CODE_ALREADY_EXISTS'
+        );
+      }
+      throw err;
+    }
 
     await graveEvents.record(
       {
@@ -542,6 +633,38 @@ async function create(tenantId, data, userId) {
   await tryPerpetuityCertificate(tenantId, grave, userId);
 
   return grave;
+}
+
+/**
+ * CADASTRO EM LOTE de gavetas ("1, 2, 3" na tela "Nova gaveta").
+ *
+ * Cada número é uma transação PRÓPRIA: se a gaveta 18 já existe, as 17 e 19
+ * continuam entrando. O retorno diz o que foi criado, o que já existia e o que
+ * falhou — antes o laço da tela abortava tudo no primeiro conflito.
+ */
+async function createDrawers(tenantId, { parentGraveId, numbers }, userId) {
+  const parent = await Grave.findOne({ where: { id: parentGraveId, tenantId } });
+  if (!parent) throw AppError.notFound('Jazigo pai não encontrado.');
+
+  const lista = (Array.isArray(numbers) ? numbers : String(numbers || '').split(/[,;\s]+/))
+    .map((n) => String(n).trim())
+    .filter(Boolean);
+  if (!lista.length) throw AppError.badRequest('Informe o(s) número(s) da gaveta.', 'MISSING_DRAWER_NUMBER');
+
+  const created = [];
+  const existing = [];
+  const failed = [];
+  for (const numero of lista) {
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const g = await create(tenantId, { parentGraveId, code: numero, unitType: 'gaveta' }, userId);
+      created.push({ number: drawerNumber(g.code, parent.code), code: g.code, id: g.id });
+    } catch (err) {
+      if (err.code === 'DRAWER_ALREADY_EXISTS') existing.push({ number: numero, code: drawerCode(parent.code, numero) });
+      else failed.push({ number: numero, message: err.message });
+    }
+  }
+  return { parent: { id: parent.id, code: parent.code }, created, existing, failed };
 }
 
 async function update(tenantId, id, data, userId) {
@@ -865,8 +988,10 @@ async function uploadPhoto(tenantId, id, { contentBase64, fileName, mimeType } =
 }
 
 module.exports = {
-  list, statusCounts, getById, summary, create, update, changeStatus, setBlocked, remove, deleteImpact,
-  uploadPhoto, EDITABLE_FIELDS,
+  list, statusCounts, getById, summary, create, createDrawers, update, changeStatus, setBlocked,
+  remove, deleteImpact, uploadPhoto, EDITABLE_FIELDS,
+  // código/número da gaveta derivados do bloco pai (usados pelo script de normalização)
+  drawerCode, drawerNumber,
   // reaproveitados pelo backfill de certidões (mesma regra da emissão automática)
   ensurePerpetuityCertificate, isPerpetualUse,
 };

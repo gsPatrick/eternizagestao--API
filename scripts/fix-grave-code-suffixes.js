@@ -18,7 +18,10 @@
  *
  * É IDEMPOTENTE: rodar de novo não muda nada.
  *
- * NÃO roda no boot da API — é uma correção pontual, executada à mão.
+ * RODA NO BOOT da API (app.js), logo após o servidor subir: o cliente não tem
+ * como abrir terminal no servidor, então o próprio deploy limpa os sufixos já
+ * gravados. Só renomeia quando a base está LIVRE entre as sepulturas ativas —
+ * nunca cria duplicidade — e é idempotente. Desligue com FIX_GRAVE_CODES=false.
  *
  * COMO EXECUTAR
  *   Simulação:  node scripts/fix-grave-code-suffixes.js --dry-run

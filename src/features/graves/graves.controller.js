@@ -36,6 +36,14 @@ const create = catchAsync(async (req, res) => {
   return created(res, await service.create(getTenantId(req), data, getUserId(req)));
 });
 
+// POST /v1/graves/drawers — cadastro EM LOTE de gavetas de um mesmo bloco.
+// O operador digita "1, 2, 3": um número já existente não pode abortar o resto.
+const createDrawers = catchAsync(async (req, res) => {
+  requireFields(req.body, ['parentGraveId']);
+  const { parentGraveId, numbers } = req.body;
+  return created(res, await service.createDrawers(getTenantId(req), { parentGraveId, numbers }, getUserId(req)));
+});
+
 const update = catchAsync(async (req, res) => {
   // Aceita também a LOCALIZAÇÃO (cemitério/quadra/rua/lote): corrigir um
   // cadastro errado não pode exigir apagar e recriar a sepultura.
@@ -82,4 +90,4 @@ const uploadPhoto = catchAsync(async (req, res) => {
   return ok(res, await service.uploadPhoto(getTenantId(req), req.params.id, data));
 });
 
-module.exports = { list, statusCounts, getById, summary, create, update, changeStatus, block, unblock, remove, deleteImpact, uploadPhoto };
+module.exports = { list, statusCounts, getById, summary, create, createDrawers, update, changeStatus, block, unblock, remove, deleteImpact, uploadPhoto };

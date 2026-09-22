@@ -16,6 +16,8 @@ router.get('/status-counts', controller.statusCounts);
 router.get('/:id', controller.getById);
 router.get('/:id/summary', controller.summary);
 router.post('/', write, controller.create);
+// Gavetas em lote: precisa vir ANTES de /:id para não ser capturado como id.
+router.post('/drawers', write, controller.createDrawers);
 router.patch('/:id', write, controller.update);
 router.post('/:id/photo', write, controller.uploadPhoto);
 router.patch('/:id/status', write, controller.changeStatus);

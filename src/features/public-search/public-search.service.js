@@ -12,8 +12,6 @@ const {
   Block,
   Cemetery,
   GraveStatus,
-  Concession,
-  Person,
 } = require('../../models');
 
 // A página pública não tem sessão e mantém a foto na tela enquanto o cidadão
@@ -25,55 +23,30 @@ const MAX_GRAVE_IDS = 500; // teto de covas candidatas por filtro (base pública
 /* ============================ helpers ============================ */
 
 const str = (v) => String(v ?? '').trim();
-const digitsOf = (v) => String(v ?? '').replace(/\D/g, '');
 const like = (v) => ({ [Op.iLike]: `%${str(v)}%` });
-
-// CPF cadastrado pode estar com ou sem máscara → casa ambas as formas.
-function cpfVariants(digits) {
-  if (digits.length !== 11) return [digits];
-  return [digits, `${digits.slice(0, 3)}.${digits.slice(3, 6)}.${digits.slice(6, 9)}-${digits.slice(9)}`];
-}
 
 // Assina fotos locais (/files/...) para leitura pública sem sessão; URLs
 // externas/vazias passam intactas (o provider trata).
 const signPhoto = (url) => (url ? storage.signedUrl(url, { ttlSeconds: PHOTO_TTL_SECONDS }) : null);
 
-// Concessão vigente (proprietário/responsável atual): prioriza 'ativa', senão a
-// mais recente por data de início. Se a cova não tem concessão própria (ex.:
-// gaveta), herda a do jazigo pai.
-function currentHolder(grave) {
-  const list = (grave?.concessions?.length ? grave.concessions : grave?.parentGrave?.concessions) || [];
-  if (!list.length) return null;
-  const sorted = [...list].sort((a, b) => {
-    const aActive = a.status === 'ativa' ? 1 : 0;
-    const bActive = b.status === 'ativa' ? 1 : 0;
-    if (aActive !== bActive) return bActive - aActive;
-    return String(b.startDate || '').localeCompare(String(a.startDate || ''));
-  });
-  const holder = sorted.find((c) => c.person) || null;
-  if (!holder || !holder.person) return null;
-  return {
-    name: holder.person.fullName || null,
-    concessionType: holder.concessionType || null,
-    concessionStatus: holder.status || null,
-  };
-}
-
 /* ============================ serialização PÚBLICA ============================ */
 
-// Nunca expõe: CPF completo, RG, causa da morte, certidão, contato. O nome do
-// concessionário é dado de registro público (constava na lápide/concessão).
+// LGPD: a consulta pública é anônima e só pode devolver o NOME DO FALECIDO, os
+// DADOS DA SEPULTURA (cemitério, quadra/rua/lote, código, situação, localização
+// e foto) e a DATA DE FALECIMENTO.
+// NUNCA expõe dado pessoal de terceiros vivos — proprietário/responsável da
+// concessão, contatos — nem documentos (CPF, RG, certidão), causa da morte,
+// filiação/declarante ou valores financeiros. O responsável só aparece nas
+// telas AUTENTICADAS (Portal da Família e painel da prefeitura).
 function toPublic(deceased) {
   const grave = deceased.currentGrave;
   const status = grave?.status;
-  const holder = grave ? currentHolder(grave) : null;
   return {
     id: deceased.id,
     fullName: deceased.fullName,
     birthDate: deceased.birthDate,
     deathDate: deceased.deathDate,
     photoUrl: signPhoto(deceased.photoUrl),
-    holder: holder ? { name: holder.name } : null,
     burial: grave
       ? {
           cemetery: grave.cemetery ? { id: grave.cemetery.id, name: grave.cemetery.name } : null,
@@ -149,84 +122,41 @@ async function structuralGraveIds(tenantId, crit) {
   return rows.map((r) => r.id);
 }
 
-// Ids de covas cujo PROPRIETÁRIO/RESPONSÁVEL (via concessão) casa por nome ou CPF.
-// Concession.person é belongsTo → `where` no include resolve limpo (sem $nested$).
-async function ownerGraveIds(tenantId, crit) {
-  const personOr = [];
-  const t = crit.anyText ? str(crit.anyText) : null;
-  if (crit.ownerName || t) personOr.push({ fullName: like(crit.ownerName || t) });
-  if (crit.cpfDigits) personOr.push({ cpf: { [Op.in]: cpfVariants(crit.cpfDigits) } });
-  // documento: casa por CPF (com/sem máscara) ou RG do proprietário/responsável.
-  if (crit.documento) {
-    const dd = digitsOf(crit.documento);
-    if (dd.length === 11) personOr.push({ cpf: { [Op.in]: cpfVariants(dd) } });
-    personOr.push({ cpf: like(crit.documento) }, { rg: like(crit.documento) });
-  }
-  if (!personOr.length) return [];
-
-  const rows = await Concession.findAll({
-    where: { tenantId },
-    attributes: ['graveId'],
-    include: [
-      { model: Person, as: 'person', attributes: [], required: true, where: { [Op.or]: personOr } },
-    ],
-    subQuery: false,
-    limit: MAX_GRAVE_IDS,
-    raw: true,
-  });
-  const ids = rows.map((r) => r.graveId);
-  // A concessão fica no jazigo (pai), mas o sepultado ocupa a gaveta (filha):
-  // inclui as covas-filhas para o dono também localizar quem está nas gavetas.
-  return withChildGraves(tenantId, ids);
-}
-
-// Expande um conjunto de covas com suas covas-filhas diretas (gavetas do jazigo).
-async function withChildGraves(tenantId, ids) {
-  if (!ids.length) return ids;
-  const children = await Grave.findAll({
-    where: { tenantId, parentGraveId: { [Op.in]: ids } },
-    attributes: ['id'],
-    raw: true,
-  });
-  return [...new Set([...ids, ...children.map((c) => c.id)])];
-}
-
-// União dos ids de cova que casam por cadastro OU por proprietário/responsável.
+// LGPD: a busca pública NÃO pesquisa mais por nome/CPF/RG de proprietário ou
+// responsável da concessão. Permitir esse critério vazava por confirmação —
+// ao retornar um jazigo, provava que aquele nome/CPF está ligado à sepultura.
+// Restam apenas critérios de CADASTRO da cova (código, quadra, rua/lote, situação).
 // Devolve [] quando nada casa (nunca null) — `IN ([])` filtra corretamente.
 async function graveIds(tenantId, crit) {
-  const [structural, owner] = await Promise.all([
-    structuralGraveIds(tenantId, crit),
-    ownerGraveIds(tenantId, crit),
-  ]);
-  return [...new Set([...structural, ...owner])];
+  return structuralGraveIds(tenantId, crit);
 }
 
 /* ============================ busca principal ============================ */
 
 /**
- * Busca PÚBLICA do portal (PDF §3.6). Aceita:
- *   - `q`        busca ampla: casa em nome do sepultado, proprietário/responsável
- *                (via concessão), CPF, código/número do jazigo, quadra, lote e situação.
- *   - filtros específicos (combinados em E): `nome`, `cpf`, `quadra`, `lote`,
- *     `jazigo`, `situacao`.
+ * Busca PÚBLICA do portal (PDF §3.6), anônima e restrita pela LGPD. Aceita:
+ *   - `q`        busca ampla: casa em nome do SEPULTADO, código/número do jazigo,
+ *                quadra, lote e situação da cova.
+ *   - filtros específicos (combinados em E): `nome`, `quadra`, `lote`,
+ *     `jazigo`, `situacao`, `documento` (apenas nº da certidão de óbito).
  *   - compat legado: `name` (→ nome), `graveCode` (→ jazigo).
- * Cada filtro textual casa tanto no dado do sepultado quanto no da cova/concessão
- * quando fizer sentido. Isolamento por tenant preservado em toda query.
+ * NÃO aceita mais pesquisa por CPF/RG nem por nome de proprietário/responsável:
+ * qualquer um deles confirmaria o vínculo de uma pessoa com um jazigo.
+ * Isolamento por tenant preservado em toda query.
  */
 async function search(tenantId, query) {
   const q = str(query.q);
   const nome = str(query.nome || query.name);
-  const cpfRaw = str(query.cpf);
   const quadra = str(query.quadra);
   const lote = str(query.lote);
   const jazigo = str(query.jazigo || query.graveCode);
   const situacao = str(query.situacao);
   const documento = str(query.documento);
 
-  const hasSpecific = nome || cpfRaw || quadra || lote || jazigo || situacao || documento;
+  const hasSpecific = nome || quadra || lote || jazigo || situacao || documento;
   if (!q && !hasSpecific) {
     throw AppError.badRequest(
-      'Informe ao menos um critério: q (busca ampla) ou um filtro (nome, cpf, documento, quadra, lote, jazigo, situacao).',
+      'Informe ao menos um critério: q (busca ampla) ou um filtro (nome, documento, quadra, lote, jazigo, situacao).',
       'MISSING_CRITERIA'
     );
   }
@@ -239,43 +169,19 @@ async function search(tenantId, query) {
 
   const and = [];
 
-  // busca ampla: nome do sepultado OU (CPF completo do sepultado) OU cova candidata
+  // busca ampla: nome do sepultado OU cova candidata (código/quadra/lote/situação)
   if (q) {
-    const qDigits = digitsOf(q);
-    const ids = await graveIds(tenantId, { anyText: q, cpfDigits: qDigits.length === 11 ? qDigits : null });
-    const or = [{ fullName: like(q) }];
-    if (qDigits.length === 11) or.push({ cpf: { [Op.in]: cpfVariants(qDigits) } });
-    or.push({ currentGraveId: { [Op.in]: ids } });
-    and.push({ [Op.or]: or });
+    const ids = await graveIds(tenantId, { anyText: q });
+    and.push({ [Op.or]: [{ fullName: like(q) }, { currentGraveId: { [Op.in]: ids } }] });
   }
 
-  // nome: casa no sepultado OU no proprietário/responsável
-  if (nome) {
-    const ids = await graveIds(tenantId, { ownerName: nome });
-    and.push({ [Op.or]: [{ fullName: like(nome) }, { currentGraveId: { [Op.in]: ids } }] });
-  }
+  // nome: apenas o nome do SEPULTADO (nunca o do proprietário/responsável)
+  if (nome) and.push({ fullName: like(nome) });
 
-  // cpf: casa no sepultado OU no proprietário/responsável
-  if (cpfRaw) {
-    const d = digitsOf(cpfRaw);
-    const ids = await graveIds(tenantId, { cpfDigits: d });
-    and.push({ [Op.or]: [{ cpf: { [Op.in]: cpfVariants(d) } }, { currentGraveId: { [Op.in]: ids } }] });
-  }
-
-  // documento: casa por número de documento — CPF, RG ou certidão de óbito do
-  // sepultado, OU CPF/RG do proprietário/responsável (via concessão).
-  if (documento) {
-    const d = digitsOf(documento);
-    const ids = await graveIds(tenantId, { documento });
-    const or = [
-      { cpf: like(documento) },
-      { rg: like(documento) },
-      { deathCertificateNumber: like(documento) },
-      { currentGraveId: { [Op.in]: ids } },
-    ];
-    if (d.length === 11) or.push({ cpf: { [Op.in]: cpfVariants(d) } });
-    and.push({ [Op.or]: or });
-  }
+  // documento: somente o nº da certidão de óbito (documento do registro do
+  // sepultamento). CPF e RG — do sepultado ou do responsável — não são critério
+  // público: serviriam para confirmar o vínculo de um CPF com um jazigo.
+  if (documento) and.push({ deathCertificateNumber: like(documento) });
 
   if (quadra) and.push({ currentGraveId: { [Op.in]: await graveIds(tenantId, { quadra }) } });
   if (lote) and.push({ currentGraveId: { [Op.in]: await graveIds(tenantId, { lote }) } });
@@ -305,29 +211,8 @@ async function search(tenantId, query) {
           },
         ],
       },
-      {
-        model: Concession,
-        as: 'concessions',
-        required: false,
-        attributes: ['id', 'status', 'startDate', 'concessionType'],
-        include: [{ model: Person, as: 'person', attributes: ['id', 'fullName'] }],
-      },
-      {
-        // fallback do proprietário quando o sepultado está numa gaveta
-        model: Grave,
-        as: 'parentGrave',
-        required: false,
-        attributes: ['id'],
-        include: [
-          {
-            model: Concession,
-            as: 'concessions',
-            required: false,
-            attributes: ['id', 'status', 'startDate', 'concessionType'],
-            include: [{ model: Person, as: 'person', attributes: ['id', 'fullName'] }],
-          },
-        ],
-      },
+      // LGPD: nenhum include de Concession/Person aqui — o dado do
+      // proprietário/responsável não pode sequer sair pela rede na rota pública.
     ],
   };
 

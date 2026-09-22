@@ -38,6 +38,7 @@ async function backfillBurialSchedules() {
   if (!burials.length) return { candidatos: 0, criados: 0, falhas: 0 };
 
   let criados = 0;
+  let conflitos = 0;
   let falhas = 0;
   for (const burial of burials) {
     try {
@@ -47,11 +48,19 @@ async function backfillBurialSchedules() {
       const ev = await ensureBurialSchedule(burial.tenantId, burial, null);
       if (ev) criados += 1;
     } catch (err) {
-      falhas += 1;
-      console.error(`[backfill-agenda] sepultamento ${burial.id}: ${err.message}`);
+      // CONFLITO DE HORÁRIO é situação ESPERADA no backfill (dois sepultamentos
+      // antigos na mesma sepultura no mesmo horário): a constraint de anticonflito
+      // deixa só um evento. Conta no resumo, sem poluir o log do boot com stack
+      // de "Exclusion constraint error" — o operador resolve pela tela Agenda.
+      if (err.code === 'SCHEDULE_CONFLICT') {
+        conflitos += 1;
+      } else {
+        falhas += 1;
+        console.error(`[backfill-agenda] sepultamento ${burial.id}: ${err.message}`);
+      }
     }
   }
-  return { candidatos: burials.length, criados, falhas };
+  return { candidatos: burials.length, criados, conflitos, falhas };
 }
 
 module.exports = { backfillBurialSchedules };

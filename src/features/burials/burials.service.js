@@ -12,7 +12,8 @@ const { assertGraveAcceptsBurial } = require('./burials.helper');
 const {
   sequelize, Burial, Grave, GraveStatus, Deceased, Person, Document, Schedule,
 } = require('../../models');
-const { combineLocalDateTime } = require('../../utils/date-local');
+const { combineLocalDateTime, TZ } = require('../../utils/date-local');
+const { findConflicts, isExclusionConstraintError } = require('../schedules/schedules.helper');
 
 const CREATE_FIELDS = [
   'graveId', 'deceasedId', 'burialDate', 'burialTime', 'declarantPersonId',
@@ -168,13 +169,44 @@ async function create(tenantId, data, userId, { force, role, autoAuthorize = tru
 
   // AGENDA AUTOMÁTICA: cadastrar o sepultado com data/hora já cria o evento na
   // agenda — interna e pública — sem o operador redigitar. É o gatilho pedido
-  // pelo cliente. Best-effort: uma falha aqui não desfaz o sepultamento.
-  await ensureBurialSchedule(tenantId, burial, userId).catch((err) => {
-    console.error('[burials] criação do evento de agenda falhou:', err.message);
-  });
+  // pelo cliente. O sepultamento é o ato principal: se a agenda não puder ser
+  // gravada (horário já ocupado na mesma sepultura/capela), o registro permanece,
+  // mas o motivo VOLTA PARA A TELA em `agendaWarning` — antes isso morria num
+  // console.error e o operador ficava sem evento sem saber.
+  const agendaWarning = await ensureBurialScheduleSafe(tenantId, burial, userId);
 
   const [enriched] = await attachAuthorizationDocuments(tenantId, [burial]);
+  enriched.agendaWarning = agendaWarning;
   return enriched;
+}
+
+// Texto do horário no fuso de operação ("05/05/2031 às 10:00") para a mensagem.
+function formatLocalDateTime(date) {
+  return new Date(date).toLocaleString('pt-BR', {
+    timeZone: TZ, day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  }).replace(', ', ' às ');
+}
+
+const TIPO_EVENTO = {
+  sepultamento: 'um sepultamento', velorio: 'um velório', exumacao: 'uma exumação',
+};
+
+/**
+ * Traduz a colisão de agenda (constraint `schedules_grave_no_overlap` /
+ * `schedules_chapel_no_overlap`) numa mensagem que o operador entende, citando
+ * o evento que ocupa o horário.
+ */
+async function buildAgendaConflictError(tenantId, { graveId, startsAt, endsAt, excludeId }) {
+  const conflitos = await findConflicts({ tenantId, graveId, startsAt, endsAt, excludeId }).catch(() => []);
+  const c = conflitos[0];
+  const quem = c ? (TIPO_EVENTO[c.scheduleType] || 'um evento') : 'um evento';
+  const quando = formatLocalDateTime(c ? c.startsAt : startsAt);
+  return AppError.conflict(
+    `Já existe ${quem} marcado para ${quando} nesta sepultura. O cadastro foi salvo, mas o evento `
+    + 'de agenda não foi criado — ajuste o horário do sepultamento ou remarque pela tela Agenda.',
+    'SCHEDULE_CONFLICT',
+    { conflicts: conflitos.map((x) => ({ id: x.id, scheduleType: x.scheduleType, startsAt: x.startsAt })) }
+  );
 }
 
 /**
@@ -182,8 +214,17 @@ async function create(tenantId, data, userId, { force, role, autoAuthorize = tru
  *
  * O horário é montado no FUSO DE OPERAÇÃO: o operador digita "16:10" pensando no
  * horário do cemitério, e o container roda em UTC — sem a conversão explícita o
- * mesmo horário sairia deslocado no portal. Idempotente por sepultamento: um
- * segundo save não duplica o evento, só atualiza.
+ * mesmo horário sairia deslocado no portal.
+ *
+ * IDEMPOTÊNCIA POR SEPULTADO: o evento é procurado por `deceasedId` (e não por
+ * sepultura+sepultado, como antes). Cada sepultado tem UM evento de sepultamento;
+ * quando o operador corrige a sepultura, o evento existente é movido em vez de um
+ * segundo ser inserido — a busca antiga não achava o evento da sepultura anterior
+ * e tentava um INSERT que colidia com ele próprio.
+ *
+ * CONFLITO REAL (outro sepultamento/velório no mesmo horário e sepultura) vira
+ * AppError 409 `SCHEDULE_CONFLICT`, checado antes do INSERT e também no catch da
+ * exclusion constraint (corrida entre requisições simultâneas).
  */
 async function ensureBurialSchedule(tenantId, burial, userId) {
   if (!burial.burialDate) return null;
@@ -192,22 +233,73 @@ async function ensureBurialSchedule(tenantId, burial, userId) {
   const endsAt = new Date(startsAt.getTime() + 60 * 60000); // 1h padrão
 
   const existing = await Schedule.findOne({
-    where: { tenantId, scheduleType: 'sepultamento', graveId: burial.graveId, deceasedId: burial.deceasedId },
+    where: {
+      tenantId,
+      scheduleType: 'sepultamento',
+      deceasedId: burial.deceasedId,
+      status: { [Op.notIn]: ['cancelado'] },
+    },
+    order: [['createdAt', 'DESC']],
   });
-  if (existing) {
-    return existing.update({ startsAt, endsAt });
+
+  // Pré-checagem: dá a mensagem boa sem depender do erro do Postgres (e mantém o
+  // log limpo). O próprio evento é excluído da busca — ele não conflita consigo.
+  const conflitos = await findConflicts({
+    tenantId, graveId: burial.graveId, startsAt, endsAt, excludeId: existing?.id || null,
+  });
+  if (conflitos.length) {
+    throw await buildAgendaConflictError(tenantId, {
+      graveId: burial.graveId, startsAt, endsAt, excludeId: existing?.id || null,
+    });
   }
-  return Schedule.create({
-    tenantId,
-    cemeteryId: burial.cemeteryId,
-    graveId: burial.graveId,
-    deceasedId: burial.deceasedId,
-    scheduleType: 'sepultamento',
-    startsAt,
-    endsAt,
-    status: 'agendado',
-    createdByUserId: userId,
-  });
+
+  try {
+    if (existing) {
+      return await existing.update({
+        startsAt,
+        endsAt,
+        graveId: burial.graveId,
+        cemeteryId: burial.cemeteryId || existing.cemeteryId,
+      });
+    }
+    return await Schedule.create({
+      tenantId,
+      cemeteryId: burial.cemeteryId,
+      graveId: burial.graveId,
+      deceasedId: burial.deceasedId,
+      scheduleType: 'sepultamento',
+      startsAt,
+      endsAt,
+      status: 'agendado',
+      createdByUserId: userId,
+    });
+  } catch (err) {
+    if (!isExclusionConstraintError(err)) throw err;
+    throw await buildAgendaConflictError(tenantId, {
+      graveId: burial.graveId, startsAt, endsAt, excludeId: existing?.id || null,
+    });
+  }
+}
+
+/**
+ * Wrapper "não derruba o fluxo principal": devolve `null` quando o evento foi
+ * criado/atualizado e uma MENSAGEM quando não foi. Quem chama (sepultamento,
+ * edição do sepultado, backfill) repassa essa mensagem ao operador em vez de
+ * engolir a falha.
+ */
+async function ensureBurialScheduleSafe(tenantId, burial, userId) {
+  try {
+    await ensureBurialSchedule(tenantId, burial, userId);
+    return null;
+  } catch (err) {
+    if (err.code === 'SCHEDULE_CONFLICT') {
+      console.warn(`[burials] agenda não criada (conflito de horário): ${err.message}`);
+      return err.message;
+    }
+    console.error('[burials] criação do evento de agenda falhou:', err.message);
+    return 'O sepultamento foi registrado, mas o evento de agenda não pôde ser criado. '
+      + 'Cadastre o horário pela tela Agenda.';
+  }
 }
 
 async function list(tenantId, query) {
@@ -300,4 +392,6 @@ async function getById(tenantId, id) {
   return enriched;
 }
 
-module.exports = { create, list, stats, getById, ensureBurialSchedule, CREATE_FIELDS };
+module.exports = {
+  create, list, stats, getById, ensureBurialSchedule, ensureBurialScheduleSafe, CREATE_FIELDS,
+};

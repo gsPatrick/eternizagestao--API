@@ -4,11 +4,10 @@ const { Op } = require('sequelize');
 const AppError = require('../../utils/app-error');
 const storage = require('../../providers/storage');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
-const { combineLocalDateTime } = require('../../utils/date-local');
 const { syncGraveOccupancy } = require('../burials/burials.helper');
-const { ensureBurialSchedule } = require('../burials/burials.service');
+const { ensureBurialScheduleSafe } = require('../burials/burials.service');
 const {
-  sequelize, Deceased, Burial, Grave, GraveStatus, Lot, Street, Block, Cemetery, Document, Schedule,
+  sequelize, Deceased, Burial, Grave, GraveStatus, Lot, Street, Block, Cemetery, Document,
   Exhumation, RemainsDeposit, OssuaryNiche, Ossuary, Concession, Person,
 } = require('../../models');
 
@@ -325,34 +324,22 @@ async function update(tenantId, id, data) {
   // Editar a data/hora/sepultura do sepultado precisa refletir na agenda —
   // senão o portal continuaria anunciando o horário antigo. Best-effort, fora
   // da transação principal.
+  let agendaWarning = null;
   if (data.burialDate !== undefined || data.burialTime !== undefined || novaSepultura) {
     const ativo = await Burial.findOne({ where: { tenantId, deceasedId: id, status: 'ativo' } });
     if (ativo && ativo.burialDate) {
-      // Atualiza o evento existente OU CRIA, se o sepultamento nasceu sem ele
-      // (cadastro antigo/sem data) — senão o sepultado ficaria para sempre fora
-      // da agenda pública. Reusa a regra de fuso/idempotência de burials.
-      const evento = await Schedule.findOne({
-        where: { tenantId, scheduleType: 'sepultamento', deceasedId: id },
-      });
-      if (evento) {
-        const startsAt = combineLocalDateTime(ativo.burialDate, ativo.burialTime || '09:00');
-        if (startsAt) {
-          await evento.update({
-            startsAt,
-            endsAt: new Date(startsAt.getTime() + 60 * 60000),
-            graveId: ativo.graveId,
-            cemeteryId: ativo.cemeteryId || evento.cemeteryId,
-          });
-        }
-      } else {
-        await ensureBurialSchedule(tenantId, ativo, null).catch((err) => {
-          console.error('[deceased] criação do evento de agenda falhou:', err.message);
-        });
-      }
+      // Uma única porta para a agenda: ensureBurialScheduleSafe move o evento
+      // existente (idempotente por sepultado) ou cria quando o sepultamento
+      // nasceu sem ele. A duplicação de regra que existia aqui deixava o evento
+      // fora de sincronia e escondia conflitos de horário num console.error.
+      agendaWarning = await ensureBurialScheduleSafe(tenantId, ativo, null);
     }
   }
 
-  return deceased.reload();
+  const atualizado = await deceased.reload();
+  if (!agendaWarning) return atualizado;
+  // O cadastro foi salvo; o aviso da agenda viaja junto para a tela avisar.
+  return { ...atualizado.toJSON(), agendaWarning };
 }
 
 /**

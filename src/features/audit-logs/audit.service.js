@@ -218,6 +218,74 @@ function friendlyEntity(modelOrTable) {
  * ========================================================================= */
 
 /**
+ * SANEAMENTO DE TAMANHO — auditoria NUNCA pode sumir por causa de tamanho.
+ *
+ * Em produção apareceu `[AUDIT] falha ao gravar log: value too long for type
+ * character varying(60)`: a rede de segurança (middlewares/audit.js) grava em
+ * `action` o texto "MÉTODO /caminho/completo", e URLs com UUID passam fácil dos
+ * 60 caracteres — o registro inteiro era PERDIDO.
+ *
+ * Duas defesas combinadas:
+ *   1. as colunas foram ampliadas por migration (action/entity_type → 255);
+ *   2. aqui truncamos ANTES de gravar, usando o tamanho declarado no próprio
+ *      model — assim o limite real nunca é ultrapassado, mesmo que alguém mude
+ *      a coluna depois. Marcamos o corte com "…" para ficar claro no histórico.
+ */
+const TEXT_FIELDS = ['action', 'entityType', 'description', 'ipAddress', 'userAgent'];
+
+// Tamanho máximo declarado no model para um campo STRING(n); null se não houver.
+function maxLengthOf(field) {
+  const attr = AuditLog.rawAttributes?.[field];
+  const len = attr?.type?.options?.length ?? attr?.type?._length;
+  return Number.isInteger(len) ? len : null;
+}
+
+// Trunca todos os campos de texto do payload aos limites das colunas.
+function fitToColumns(payload) {
+  for (const field of TEXT_FIELDS) {
+    const value = payload[field];
+    if (typeof value !== 'string') continue;
+    const max = maxLengthOf(field);
+    if (!max || value.length <= max) continue;
+    payload[field] = `${value.slice(0, max - 1)}…`;
+  }
+  return payload;
+}
+
+/**
+ * ÚLTIMA LINHA DE DEFESA: se a gravação ainda falhar por tamanho (coluna menor
+ * do que o model acredita — schema fora de sincronia, por exemplo), tenta de
+ * novo com um payload MÍNIMO e agressivamente cortado. Melhor um registro
+ * pobre do que nenhum registro. Nunca lança.
+ */
+function retryOrReport(payload, err) {
+  const pg = err?.parent?.code || err?.original?.code;
+  if (pg !== '22001') {
+    console.error('[AUDIT] falha ao gravar log:', err.message);
+    return null;
+  }
+  const cut = (v, n) => (typeof v === 'string' && v.length > n ? `${v.slice(0, n - 1)}…` : v);
+  const minimal = {
+    tenantId: payload.tenantId,
+    userId: payload.userId,
+    portalAccountId: payload.portalAccountId,
+    action: cut(payload.action, 60) || 'acao',
+    entityType: cut(payload.entityType, 60),
+    entityId: payload.entityId,
+    description: cut(payload.description, 255),
+    previousData: payload.previousData,
+    newData: payload.newData,
+    ipAddress: cut(payload.ipAddress, 45),
+    userAgent: cut(payload.userAgent, 255),
+  };
+  console.warn('[AUDIT] valor longo demais — regravando log truncado.');
+  return AuditLog.create(minimal).catch((e) => {
+    console.error('[AUDIT] falha ao gravar log (após truncar):', e.message);
+    return null;
+  });
+}
+
+/**
  * record — grava UM registro de auditoria. Fire-and-forget: nunca lança.
  * Lê o ator do ALS; overrides no argumento têm precedência.
  * Marca o store como já auditado (getActor().__audited = true) para a rede de
@@ -255,9 +323,7 @@ function record({
       userAgent: overrides.userAgent !== undefined ? overrides.userAgent : actor.userAgent || null,
     };
 
-    return AuditLog.create(payload).catch((err) =>
-      console.error('[AUDIT] falha ao gravar log:', err.message)
-    );
+    return AuditLog.create(fitToColumns(payload)).catch((err) => retryOrReport(payload, err));
   } catch (err) {
     console.error('[AUDIT] falha ao gravar log:', err.message);
     return Promise.resolve(null);
@@ -282,7 +348,7 @@ function log({
   userAgent = null,
 } = {}) {
   try {
-    return AuditLog.create({
+    const payload = {
       tenantId,
       userId,
       portalAccountId,
@@ -294,7 +360,8 @@ function log({
       newData,
       ipAddress,
       userAgent,
-    }).catch((err) => console.error('[AUDIT] falha ao gravar log:', err.message));
+    };
+    return AuditLog.create(fitToColumns(payload)).catch((err) => retryOrReport(payload, err));
   } catch (err) {
     console.error('[AUDIT] falha ao gravar log:', err.message);
     return Promise.resolve(null);

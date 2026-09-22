@@ -10,12 +10,13 @@ module.exports = (sequelize, DataTypes) => {
       legalName: { type: DataTypes.STRING(200) },
       cnpj: { type: DataTypes.STRING(18) },
       subdomain: { type: DataTypes.STRING(63), allowNull: false, unique: true },
-      logoUrl: { type: DataTypes.STRING(500) },
+      // TEXT: caminho + nome original do arquivo passava de 500 (erro 22001 em prod)
+      logoUrl: { type: DataTypes.TEXT },
       // Imagens da PÁGINA PÚBLICA da cidade (hero e rodapé). Quando vazias, a
       // landing usa a arte padrão da plataforma — assim cada cidade pode ter a
       // sua foto, diferente do portal Eterniza.
-      heroImageUrl: { type: DataTypes.STRING(500) },
-      footerImageUrl: { type: DataTypes.STRING(500) },
+      heroImageUrl: { type: DataTypes.TEXT },
+      footerImageUrl: { type: DataTypes.TEXT },
       primaryColor: { type: DataTypes.STRING(7) },
       secondaryColor: { type: DataTypes.STRING(7) },
       email: { type: DataTypes.STRING(150), validate: { isEmail: true } },

@@ -10,8 +10,9 @@ module.exports = (sequelize, DataTypes) => {
       tenantId: { type: DataTypes.UUID },
       userId: { type: DataTypes.UUID },
       portalAccountId: { type: DataTypes.UUID },
-      action: { type: DataTypes.STRING(60), allowNull: false },
-      entityType: { type: DataTypes.STRING(60) },
+      // 255: a rede de segurança grava "MÉTODO /caminho" — 60 estourava e perdia o log
+      action: { type: DataTypes.STRING(255), allowNull: false },
+      entityType: { type: DataTypes.STRING(255) },
       entityId: { type: DataTypes.UUID },
       description: { type: DataTypes.STRING(255) },
       previousData: { type: DataTypes.JSONB },

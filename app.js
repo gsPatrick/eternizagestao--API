@@ -291,6 +291,14 @@ if (require.main === module) {
         console.error('Falha ao conectar no PostgreSQL:', err.message);
       }
       // fora do caminho crítico: a API já está no ar quando isto começa
+      // UPLOADS GRANDES (ortofotos de 14–56 MB): o padrão do Node corta a
+      // requisição em 300s (requestTimeout) e os headers em 60s. Numa conexão
+      // lenta o envio de 56 MB estoura isso e a requisição chega aqui como
+      // "request aborted". Damos folga: 10 min por requisição.
+      server.requestTimeout = Number(process.env.SERVER_REQUEST_TIMEOUT_MS || 600_000);
+      server.headersTimeout = Number(process.env.SERVER_HEADERS_TIMEOUT_MS || 120_000);
+      server.keepAliveTimeout = Number(process.env.SERVER_KEEPALIVE_TIMEOUT_MS || 75_000);
+
       runTenantImageUrlFix();
       runPerpetuityBackfill();
       runBurialAgendaBackfill();

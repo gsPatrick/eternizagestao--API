@@ -53,6 +53,16 @@ const getMapContext = catchAsync(async (req, res) => {
   return ok(res, await service.getMapContext(getTenantId(req), req.query.cemeteryId));
 });
 
+// sepulturas já demarcadas (camada de referência) — só contorno, com bbox/limit
+const listMapGraves = catchAsync(async (req, res) => {
+  const data = await service.listMapGraves(getTenantId(req), req.query.cemeteryId, {
+    bbox: req.query.bbox,
+    limit: req.query.limit,
+    excludeId: req.query.excludeId,
+  });
+  return ok(res, data.data, data.meta);
+});
+
 const listPaths = catchAsync(async (req, res) => {
   return ok(res, await service.listPaths(getTenantId(req), req.params.cemeteryId));
 });
@@ -75,5 +85,5 @@ const setGraveGeometry = catchAsync(async (req, res) => {
 
 module.exports = {
   listOrthophotos, uploadOrthophoto, updateOrthophoto, removeOrthophoto, getMapContext,
-  listPaths, createPath, removePath, setGraveGeometry,
+  listMapGraves, listPaths, createPath, removePath, setGraveGeometry,
 };

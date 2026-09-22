@@ -36,6 +36,9 @@ const orthoDelete = authorize('admin');
 // contexto do mapa: centro do cemitério + ortofoto ativa + bounds
 router.get('/map/context', controller.getMapContext);
 
+// sepulturas já demarcadas do cemitério (camada de referência da demarcação)
+router.get('/map/graves', controller.listMapGraves);
+
 // ortofotos — estilo query-param (?cemeteryId=) usado pelo painel do mapa
 router.get('/orthophotos', controller.listOrthophotos);
 router.post('/orthophotos', orthoWrite, orthoBinary, controller.uploadOrthophoto);

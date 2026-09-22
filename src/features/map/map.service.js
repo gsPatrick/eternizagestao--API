@@ -216,6 +216,62 @@ async function getMapContext(tenantId, cemeteryId) {
   };
 }
 
+/**
+ * Sepulturas JÁ DEMARCADAS do cemitério — camada de REFERÊNCIA da demarcação.
+ *
+ * Quem está demarcando precisa VER as covas vizinhas para alinhar e não
+ * sobrepor. A listagem normal (/graves) não serve: ela carrega proprietário,
+ * sepultados, contagens e paginação — caro demais num cemitério com milhares
+ * de covas, e a tela só precisa do contorno.
+ *
+ * Aqui devolvemos o MÍNIMO (id, código, contorno, âncora) e só do que tem
+ * geometria. O recorte por `bbox` (lat/lng mín/máx) limita ao pedaço do mapa
+ * que o operador está olhando — usando a âncora latitude/longitude, que é
+ * gravada junto com o geoPolygon. Sem bbox, um teto de `limit` protege a tela.
+ */
+const MAP_GRAVES_DEFAULT_LIMIT = 1500;
+const MAP_GRAVES_MAX_LIMIT = 5000;
+
+async function listMapGraves(tenantId, cemeteryId, query = {}) {
+  await assertCemetery(tenantId, cemeteryId);
+  const { Op } = require('sequelize');
+
+  const where = { tenantId, cemeteryId, geoPolygon: { [Op.ne]: null } };
+
+  // bbox = "minLat,minLng,maxLat,maxLng"
+  const bbox = String(query.bbox || '').split(',').map(Number);
+  if (bbox.length === 4 && bbox.every((n) => Number.isFinite(n))) {
+    const [minLat, minLng, maxLat, maxLng] = bbox;
+    // Covas antigas podem ter contorno sem âncora — nesse caso não dá para
+    // recortar, e é melhor mostrar do que esconder (são poucas).
+    where[Op.and] = [{
+      [Op.or]: [
+        { latitude: null },
+        { longitude: null },
+        {
+          latitude: { [Op.between]: [Math.min(minLat, maxLat), Math.max(minLat, maxLat)] },
+          longitude: { [Op.between]: [Math.min(minLng, maxLng), Math.max(minLng, maxLng)] },
+        },
+      ],
+    }];
+  }
+
+  if (query.excludeId) where.id = { [Op.ne]: query.excludeId };
+
+  const limit = Math.min(
+    Number(query.limit) > 0 ? Number(query.limit) : MAP_GRAVES_DEFAULT_LIMIT,
+    MAP_GRAVES_MAX_LIMIT
+  );
+
+  const rows = await Grave.findAll({
+    where,
+    attributes: ['id', 'code', 'geoPolygon', 'latitude', 'longitude'],
+    limit,
+    raw: true,
+  });
+  return { data: rows, meta: { total: rows.length, limit, truncated: rows.length >= limit } };
+}
+
 // ---- Malha de caminhos (navegação GPS) ----
 async function listPaths(tenantId, cemeteryId) {
   await assertCemetery(tenantId, cemeteryId);
@@ -259,5 +315,5 @@ async function setGraveGeometry(tenantId, graveId, { geoPolygon, latitude, longi
 
 module.exports = {
   listOrthophotos, uploadOrthophoto, updateOrthophoto, removeOrthophoto, getMapContext,
-  listPaths, createPath, removePath, setGraveGeometry,
+  listMapGraves, listPaths, createPath, removePath, setGraveGeometry,
 };

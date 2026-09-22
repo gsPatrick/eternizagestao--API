@@ -404,8 +404,17 @@ async function resolveLotFromText(tenantId, { cemeteryId, block, street, lot }, 
  * sepultura, acrescentamos um sufixo sequencial (-2, -3, ...). O código segue
  * ÚNICO por cemitério, que é o que o índice exige.
  *
- * Considera também os registros SOFT-DELETED (paranoid: false): o índice único
- * enxerga a linha apagada, então ignorá-la geraria colisão na hora do insert.
+ * Só conta sepulturas ATIVAS. O índice de unicidade é PARCIAL
+ * (`graves_cemetery_id_code_active_unique ON graves (cemetery_id, code)
+ * WHERE deleted_at IS NULL`, migration 20260717000001), portanto uma linha
+ * soft-deleted NÃO ocupa o código e não colide no insert.
+ *
+ * Antes esta busca usava `paranoid: false` e enxergava as apagadas: o cliente
+ * criava e excluía a MESMA sepultura repetidas vezes e o código ia ganhando
+ * sufixo a cada rodada (12-12BLOCO18, -2, -3, -4, -5). Mesmo bug de subdomínio
+ * preso por cidade apagada, resolvido em tenants.service. Recriar uma sepultura
+ * excluída deve reaproveitar o código natural; a unicidade entre ATIVAS
+ * continua garantida pelo sufixo + pelo índice parcial.
  */
 async function nextGraveCode(tenantId, lot, transaction) {
   const block = await Block.findOne({
@@ -417,7 +426,6 @@ async function nextGraveCode(tenantId, lot, transaction) {
   const taken = await Grave.findAll({
     where: { tenantId, cemeteryId: lot.cemeteryId, code: { [Op.like]: `${base}%` } },
     attributes: ['code'],
-    paranoid: false,
     raw: true,
     transaction,
   });

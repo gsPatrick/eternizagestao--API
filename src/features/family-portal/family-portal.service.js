@@ -9,7 +9,7 @@ const { signAccessToken } = require('../../utils/jwt');
 const { portalActivationUrl } = require('../../utils/tenant-url');
 const {
   FamilyPortalAccount, Person, Billing, Payment, Concession, Grave,
-  GraveStatus, Lot, Street, Block, Deceased, Burial, GraveEvent, Cemetery, Tenant,
+  GraveStatus, Lot, Street, Block, Deceased, Burial, GraveEvent, Cemetery, Tenant, Document,
 } = require('../../models');
 
 // Campos da Person que o próprio titular pode ver/editar pelo portal.
@@ -204,7 +204,7 @@ async function getMe(tenantId, personId, account) {
   // Somente leitura — usado como rótulo no cabeçalho do portal.
   let cemetery = null;
   const concession = await Concession.findOne({
-    where: { tenantId, personId },
+    where: concessionLinkWhere(tenantId, personId),
     order: [['startDate', 'DESC']],
     include: [{
       model: Grave, as: 'grave', attributes: ['id', 'cemeteryId'],
@@ -313,12 +313,72 @@ async function reissueBilling(tenantId, personId, billingId) {
   return billingsService.reissue(tenantId, billingId);
 }
 
-// Meus jazigos: todas as concessões do titular (qualquer status), já enriquecidas
-// para a tela do portal — localização, situação financeira (em dia x pendência),
-// sepultados e linha do tempo de cada jazigo. Somente leitura.
+/* ------------------------------------------------------------------------- */
+/* Vínculo pessoa ↔ jazigos/sepultados                                       */
+/* ------------------------------------------------------------------------- */
+//
+// O titular do portal enxerga um jazigo quando é o PROPRIETÁRIO da concessão
+// (Concession.personId) OU o RESPONSÁVEL legal por ela
+// (Concession.responsiblePersonId). Num jazigo-bloco a concessão fica no
+// jazigo PAI, enquanto os sepultados ocupam as GAVETAS filhas
+// (Grave.parentGraveId) — por isso toda busca por ocupantes/sepultamentos/
+// documentos expande o conjunto para incluir as gavetas.
+
+// WHERE de concessões vinculadas à pessoa (proprietário OU responsável).
+// `extra` entra em AND (ex.: filtro de status).
+function concessionLinkWhere(tenantId, personId, extra = {}) {
+  return {
+    tenantId,
+    ...extra,
+    [Op.or]: [{ personId }, { responsiblePersonId: personId }],
+  };
+}
+
+// Gavetas filhas dos jazigos informados. Devolve os ids das gavetas, o mapa
+// gaveta → jazigo pai (para agrupar no card do jazigo) e o código de cada gaveta.
+async function expandDrawers(tenantId, graveIds) {
+  const parentOf = new Map();
+  const codeOf = new Map();
+  if (!graveIds.length) return { drawerIds: [], parentOf, codeOf };
+  const drawers = await Grave.findAll({
+    where: { tenantId, parentGraveId: { [Op.in]: graveIds } },
+    attributes: ['id', 'parentGraveId', 'code'],
+  });
+  const ownSet = new Set(graveIds);
+  const drawerIds = [];
+  for (const d of drawers) {
+    // gaveta que já tem concessão própria do titular continua sendo um jazigo seu
+    if (ownSet.has(d.id)) continue;
+    drawerIds.push(d.id);
+    parentOf.set(d.id, d.parentGraveId);
+    codeOf.set(d.id, d.code);
+  }
+  return { drawerIds, parentOf, codeOf };
+}
+
+function groupBy(rows, keyFn) {
+  const map = new Map();
+  for (const row of rows) {
+    const k = keyFn(row);
+    if (!map.has(k)) map.set(k, []);
+    map.get(k).push(row);
+  }
+  return map;
+}
+
+// Meus jazigos: concessões do titular (como proprietário, qualquer status; como
+// responsável, exceto canceladas), já enriquecidas para a tela do portal —
+// localização, situação financeira (em dia x pendência), sepultados (inclusive
+// os das gavetas do jazigo) e linha do tempo. Somente leitura.
 async function listGraves(tenantId, personId) {
-  const concessions = await Concession.findAll({
-    where: { tenantId, personId },
+  const rawConcessions = await Concession.findAll({
+    where: {
+      tenantId,
+      [Op.or]: [
+        { personId },
+        { responsiblePersonId: personId, status: { [Op.ne]: 'cancelada' } },
+      ],
+    },
     order: [['startDate', 'DESC']],
     include: [{
       model: Grave, as: 'grave',
@@ -326,49 +386,55 @@ async function listGraves(tenantId, personId) {
     }],
   });
 
-  const graveIds = [...new Set(concessions.map((c) => c.graveId).filter(Boolean))];
+  // Um card por jazigo: se houver mais de uma concessão no mesmo jazigo (ex.:
+  // titular de uma e responsável de outra), prefere a ATIVA, senão a mais recente.
+  const byGrave = new Map();
+  for (const c of rawConcessions) {
+    if (!c.graveId) continue;
+    const current = byGrave.get(c.graveId);
+    if (!current || (current.status !== 'ativa' && c.status === 'ativa')) byGrave.set(c.graveId, c);
+  }
+  const concessions = [...byGrave.values()];
+
+  const graveIds = concessions.map((c) => c.graveId);
   if (!graveIds.length) return [];
+
+  const { drawerIds, parentOf, codeOf } = await expandDrawers(tenantId, graveIds);
+  const allGraveIds = [...graveIds, ...drawerIds];
+  // gaveta → jazigo pai (o card); jazigo próprio → ele mesmo
+  const portalGraveOf = (id) => parentOf.get(id) || id;
 
   const [openBillings, occupants, burials, events] = await Promise.all([
     // Situação financeira por jazigo: existe cobrança em aberto? → pendência.
     Billing.findAll({
       where: {
-        tenantId, payerPersonId: personId, graveId: { [Op.in]: graveIds },
+        tenantId, payerPersonId: personId, graveId: { [Op.in]: allGraveIds },
         status: { [Op.in]: ['pendente', 'em_atraso'] },
       },
       attributes: ['graveId'],
     }),
-    // Ocupantes atuais de cada jazigo.
+    // Ocupantes atuais de cada jazigo (e de suas gavetas).
     Deceased.findAll({
-      where: { tenantId, currentGraveId: { [Op.in]: graveIds } },
+      where: { tenantId, currentGraveId: { [Op.in]: allGraveIds } },
       order: [['fullName', 'ASC']],
     }),
     // Histórico de sepultamentos (data + fallback de sepultados sem ocupação atual).
     Burial.findAll({
-      where: { tenantId, graveId: { [Op.in]: graveIds } },
+      where: { tenantId, graveId: { [Op.in]: allGraveIds } },
       include: [{ model: Deceased, as: 'deceased' }],
       order: [['burialDate', 'DESC']],
     }),
-    // Linha do tempo do jazigo.
+    // Linha do tempo do jazigo (e de suas gavetas).
     GraveEvent.findAll({
-      where: { tenantId, graveId: { [Op.in]: graveIds } },
+      where: { tenantId, graveId: { [Op.in]: allGraveIds } },
       order: [['occurredAt', 'DESC']],
     }),
   ]);
 
-  const openByGrave = new Set(openBillings.map((b) => b.graveId));
-  const groupBy = (rows, key) => {
-    const map = new Map();
-    for (const row of rows) {
-      const k = row[key];
-      if (!map.has(k)) map.set(k, []);
-      map.get(k).push(row);
-    }
-    return map;
-  };
-  const occByGrave = groupBy(occupants, 'currentGraveId');
-  const burialsByGrave = groupBy(burials, 'graveId');
-  const eventsByGrave = groupBy(events, 'graveId');
+  const openByGrave = new Set(openBillings.map((b) => portalGraveOf(b.graveId)));
+  const occByGrave = groupBy(occupants, (d) => portalGraveOf(d.currentGraveId));
+  const burialsByGrave = groupBy(burials, (b) => portalGraveOf(b.graveId));
+  const eventsByGrave = groupBy(events, (e) => portalGraveOf(e.graveId));
 
   return concessions.map((c) => {
     const g = c.grave;
@@ -380,9 +446,11 @@ async function listGraves(tenantId, personId) {
     };
 
     // Sepultados: ocupantes atuais; se não houver, deriva do histórico de sepultamentos.
+    // `drawerCode` identifica a gaveta quando o sepultado está numa gaveta do jazigo.
     let deceased = (occByGrave.get(gid) || []).map((d) => ({
       id: d.id, fullName: d.fullName, birthDate: d.birthDate,
       deathDate: d.deathDate, burialDate: burialDateFor(d.id),
+      drawerCode: codeOf.get(d.currentGraveId) || null,
     }));
     if (!deceased.length) {
       const seen = new Set();
@@ -392,6 +460,7 @@ async function listGraves(tenantId, personId) {
         deceased.push({
           id: b.deceased.id, fullName: b.deceased.fullName, birthDate: b.deceased.birthDate,
           deathDate: b.deceased.deathDate, burialDate: b.burialDate,
+          drawerCode: codeOf.get(b.graveId) || null,
         });
       }
     }
@@ -407,6 +476,8 @@ async function listGraves(tenantId, personId) {
     return {
       id: gid,
       concessionId: c.id,
+      // vínculo do titular com o jazigo: proprietário da concessão ou responsável legal
+      relation: c.personId === personId ? 'proprietario' : 'responsavel',
       code: g ? g.code : null,
       unitType: g ? g.unitType : null,
       cemetery: g && g.cemetery ? g.cemetery.name : null,
@@ -416,6 +487,8 @@ async function listGraves(tenantId, personId) {
       startDate: c.startDate,
       concessionStatus: c.status,
       status: openByGrave.has(gid) ? 'pendente' : 'em_dia',
+      // gavetas do jazigo (o front filtra documentos do jazigo por elas também)
+      drawerIds: drawerIds.filter((id) => parentOf.get(id) === gid),
       location: {
         block: block ? block.name : null,
         street: street ? street.name : null,
@@ -431,32 +504,188 @@ async function listGraves(tenantId, personId) {
   });
 }
 
-// Meus sepultados: ocupantes atuais dos jazigos com concessão ATIVA do titular,
-// mais o histórico de sepultamentos desses jazigos.
+// Meus sepultados: ocupantes atuais dos jazigos com concessão ATIVA do titular
+// (como proprietário ou responsável, incluindo as gavetas desses jazigos), mais
+// os sepultados de quem ele é o responsável direto (Deceased.responsiblePersonId),
+// e o histórico de sepultamentos correspondente.
 async function listDeceased(tenantId, personId) {
   const activeConcessions = await Concession.findAll({
-    where: { tenantId, personId, status: 'ativa' },
+    where: concessionLinkWhere(tenantId, personId, { status: 'ativa' }),
     attributes: ['graveId'],
   });
-  const graveIds = [...new Set(activeConcessions.map((c) => c.graveId))];
-  if (!graveIds.length) return { deceased: [], history: [] };
+  const graveIds = [...new Set(activeConcessions.map((c) => c.graveId).filter(Boolean))];
+  const { drawerIds } = await expandDrawers(tenantId, graveIds);
+  const allGraveIds = [...graveIds, ...drawerIds];
 
-  const [deceased, history] = await Promise.all([
-    Deceased.findAll({
-      where: { tenantId, currentGraveId: { [Op.in]: graveIds } },
-      order: [['fullName', 'ASC']],
-    }),
-    Burial.findAll({
-      where: { tenantId, graveId: { [Op.in]: graveIds } },
-      include: [{ model: Deceased, as: 'deceased' }],
-      order: [['burialDate', 'DESC']],
-    }),
-  ]);
+  const deceasedOr = [{ responsiblePersonId: personId }];
+  if (allGraveIds.length) deceasedOr.push({ currentGraveId: { [Op.in]: allGraveIds } });
+
+  const deceased = await Deceased.findAll({
+    where: { tenantId, [Op.or]: deceasedOr },
+    order: [['fullName', 'ASC']],
+  });
+  if (!deceased.length && !allGraveIds.length) return { deceased: [], history: [] };
+
+  const burialOr = [];
+  if (allGraveIds.length) burialOr.push({ graveId: { [Op.in]: allGraveIds } });
+  if (deceased.length) burialOr.push({ deceasedId: { [Op.in]: deceased.map((d) => d.id) } });
+
+  const history = await Burial.findAll({
+    where: { tenantId, [Op.or]: burialOr },
+    include: [{ model: Deceased, as: 'deceased' }],
+    order: [['burialDate', 'DESC']],
+  });
 
   return { deceased, history };
 }
 
+/* ------------------------------------------------------------------------- */
+/* Documentos do titular                                                     */
+/* ------------------------------------------------------------------------- */
+
+// Tipos de documento oficial disponibilizados à família no portal.
+const PORTAL_DOCUMENT_TYPES = ['autorizacao_sepultamento', 'certidao_perpetuidade'];
+
+const PORTAL_DOCUMENT_LABELS = {
+  autorizacao_sepultamento: 'Autorização de Sepultamento',
+  certidao_perpetuidade: 'Certidão de Perpetuidade',
+};
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+// Escopo de documentos do titular: jazigos de concessões NÃO canceladas (como
+// proprietário ou responsável) + gavetas filhas; sepultados nesses jazigos/
+// gavetas + sepultados sob sua responsabilidade direta.
+async function resolveDocumentScope(tenantId, personId) {
+  const concessions = await Concession.findAll({
+    where: concessionLinkWhere(tenantId, personId, { status: { [Op.ne]: 'cancelada' } }),
+    attributes: ['graveId'],
+  });
+  const graveIds = [...new Set(concessions.map((c) => c.graveId).filter(Boolean))];
+  const { drawerIds, parentOf } = await expandDrawers(tenantId, graveIds);
+  const allGraveIds = [...graveIds, ...drawerIds];
+
+  const deceasedOr = [{ responsiblePersonId: personId }];
+  if (allGraveIds.length) deceasedOr.push({ currentGraveId: { [Op.in]: allGraveIds } });
+  const deceased = await Deceased.findAll({
+    where: { tenantId, [Op.or]: deceasedOr },
+    attributes: ['id', 'currentGraveId'],
+  });
+
+  return {
+    concessionGraveIds: new Set(graveIds),
+    allGraveIds,
+    parentOf,
+    deceasedIds: deceased.map((d) => d.id),
+    deceasedGraveOf: new Map(deceased.map((d) => [d.id, d.currentGraveId])),
+  };
+}
+
+// Regra de PROPRIEDADE do documento (mesma na listagem e no download):
+// do jazigo/gaveta do titular, de um sepultado vinculado a ele, ou emitido em seu nome.
+function documentOwnershipWhere(scope, personId) {
+  const or = [{ personId }];
+  if (scope.allGraveIds.length) or.push({ graveId: { [Op.in]: scope.allGraveIds } });
+  if (scope.deceasedIds.length) or.push({ deceasedId: { [Op.in]: scope.deceasedIds } });
+  return { [Op.or]: or };
+}
+
+// Documentos do titular no portal: certidões de perpetuidade e autorizações de
+// sepultamento vinculadas aos seus jazigos/sepultados. Exibe só a via MAIS
+// RECENTE de cada documento (a 2ª via aponta para a origem por
+// originalDocumentId — agrupamos pela raiz da cadeia) e nunca as canceladas.
+async function listDocuments(tenantId, personId) {
+  const scope = await resolveDocumentScope(tenantId, personId);
+
+  // Busca SEM filtro de status para resolver a raiz da cadeia de vias mesmo
+  // quando uma via intermediária foi cancelada; as canceladas saem depois.
+  const docs = await Document.findAll({
+    where: {
+      tenantId,
+      documentType: { [Op.in]: PORTAL_DOCUMENT_TYPES },
+      ...documentOwnershipWhere(scope, personId),
+    },
+    include: [
+      { model: Grave, as: 'grave', attributes: ['id', 'code', 'unitType', 'parentGraveId'] },
+      { model: Deceased, as: 'deceased', attributes: ['id', 'fullName'] },
+    ],
+    order: [['issuedAt', 'DESC'], ['createdAt', 'DESC']],
+  });
+
+  const byId = new Map(docs.map((d) => [d.id, d]));
+  const rootOf = (doc) => {
+    let current = doc;
+    const seen = new Set([doc.id]);
+    while (current.originalDocumentId) {
+      const parent = byId.get(current.originalDocumentId);
+      // origem fora do conjunto → a própria referência é a raiz
+      if (!parent) return current.originalDocumentId;
+      if (seen.has(parent.id)) break; // proteção contra ciclo
+      seen.add(parent.id);
+      current = parent;
+    }
+    return current.id;
+  };
+
+  // Jazigo do portal (card) a que o documento pertence: gaveta → jazigo pai.
+  const portalGraveOf = (graveId) => {
+    if (!graveId) return null;
+    if (scope.parentOf.has(graveId)) return scope.parentOf.get(graveId);
+    return scope.concessionGraveIds.has(graveId) ? graveId : null;
+  };
+
+  // `docs` já vem do mais novo para o mais antigo: a 1ª via válida de cada raiz vence.
+  const latestByRoot = new Map();
+  for (const doc of docs) {
+    if (doc.status === 'cancelado') continue;
+    const root = rootOf(doc);
+    if (!latestByRoot.has(root)) latestByRoot.set(root, doc);
+  }
+
+  return [...latestByRoot.values()].map((d) => ({
+    id: d.id,
+    documentType: d.documentType,
+    typeLabel: PORTAL_DOCUMENT_LABELS[d.documentType] || 'Documento',
+    formattedNumber: d.formattedNumber,
+    issuedAt: d.issuedAt,
+    status: d.status,
+    isReissue: Boolean(d.originalDocumentId) || (d.reissueCount || 0) > 0,
+    graveId: d.graveId,
+    graveCode: d.grave ? d.grave.code : null,
+    graveUnitType: d.grave ? d.grave.unitType : null,
+    portalGraveId: portalGraveOf(d.graveId)
+      || portalGraveOf(scope.deceasedGraveOf.get(d.deceasedId)),
+    deceasedId: d.deceasedId,
+    deceasedName: d.deceased ? d.deceased.fullName : null,
+  }));
+}
+
+// PDF de um documento do titular. Confere a propriedade pela MESMA regra da
+// listagem e delega a renderização ao gerador oficial (documents.service),
+// que monta o PDF na hora a partir do cadastro atual.
+async function getDocumentPdf(tenantId, personId, documentId) {
+  if (!UUID_RE.test(String(documentId || ''))) throw AppError.notFound('Documento não encontrado.');
+
+  const scope = await resolveDocumentScope(tenantId, personId);
+  const owned = await Document.findOne({
+    where: {
+      id: documentId,
+      tenantId,
+      documentType: { [Op.in]: PORTAL_DOCUMENT_TYPES },
+      status: { [Op.ne]: 'cancelado' },
+      ...documentOwnershipWhere(scope, personId),
+    },
+    attributes: ['id'],
+  });
+  if (!owned) throw AppError.notFound('Documento não encontrado.');
+
+  // require tardio: evita carregar o pipeline de PDF no boot do portal.
+  const documentsService = require('../documents/documents.service');
+  return documentsService.getOrCreatePdf(tenantId, documentId);
+}
+
 module.exports = {
   register, activate, login, getMe, updateMe, changePassword, listDebts, listBillings,
-  reissueBilling, listGraves, listDeceased, PORTAL_EDITABLE_FIELDS,
+  reissueBilling, listGraves, listDeceased, listDocuments, getDocumentPdf,
+  PORTAL_EDITABLE_FIELDS,
 };

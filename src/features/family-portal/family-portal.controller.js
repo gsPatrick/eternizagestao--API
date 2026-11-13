@@ -78,7 +78,26 @@ const listDeceased = catchAsync(async (req, res) => {
   return ok(res, await service.listDeceased(tenantId, personId));
 });
 
+// Documentos oficiais do titular (certidão de perpetuidade / autorização de
+// sepultamento) — só a via mais recente de cada um.
+const listDocuments = catchAsync(async (req, res) => {
+  const { tenantId, personId } = getPortalContext(req);
+  return ok(res, await service.listDocuments(tenantId, personId));
+});
+
+// PDF de um documento do titular (propriedade conferida no service). Gerado na
+// hora pelo mesmo renderizador oficial do painel.
+const downloadDocumentPdf = catchAsync(async (req, res) => {
+  const { tenantId, personId } = getPortalContext(req);
+  const { buffer, document } = await service.getDocumentPdf(tenantId, personId, req.params.id);
+  const fileName = `${document.documentType}-${String(document.formattedNumber || '').replace(/\//g, '-')}.pdf`;
+  res.setHeader('Content-Type', 'application/pdf');
+  res.setHeader('Content-Disposition', `inline; filename="${fileName}"`);
+  res.setHeader('Cache-Control', 'private, no-store');
+  return res.send(buffer);
+});
+
 module.exports = {
   register, activate, login, getMe, updateMe, changePassword, listDebts, listBillings,
-  reissueBilling, listGraves, listDeceased,
+  reissueBilling, listGraves, listDeceased, listDocuments, downloadDocumentPdf,
 };

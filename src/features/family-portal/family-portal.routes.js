@@ -26,5 +26,7 @@ router.get('/billings', portalAuth, controller.listBillings);
 router.post('/billings/:id/reissue', portalAuth, controller.reissueBilling);
 router.get('/graves', portalAuth, controller.listGraves);
 router.get('/deceased', portalAuth, controller.listDeceased);
+router.get('/documents', portalAuth, controller.listDocuments);
+router.get('/documents/:id/pdf', portalAuth, controller.downloadDocumentPdf);
 
 module.exports = router;

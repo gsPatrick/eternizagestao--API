@@ -5,6 +5,7 @@ const { Op, fn, col, literal } = require('sequelize');
 const AppError = require('../../utils/app-error');
 const storage = require('../../providers/storage');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
+const { buildNameSearch } = require('../../utils/text-search');
 const { randomToken, hashPassword } = require('../../utils/password');
 const { portalActivationUrl, portalBaseUrl } = require('../../utils/tenant-url');
 const {
@@ -197,11 +198,15 @@ async function list(tenantId, query) {
   const where = { tenantId };
   const and = [];
   if (query.search) {
-    where[Op.or] = [
-      { fullName: { [Op.iLike]: `%${query.search}%` } },
-      { cpf: { [Op.iLike]: `%${query.search}%` } },
-      { email: { [Op.iLike]: `%${query.search}%` } },
-    ];
+    // Sem acento/maiúscula, cada palavra em qualquer posição e CPF só por
+    // dígitos — o seletor de pessoas dos formulários depende disso para achar
+    // qualquer um entre milhares de cadastros (ver utils/text-search).
+    const cond = buildNameSearch(Person.sequelize, query.search, {
+      name: '"Person"."full_name"',
+      cpf: '"Person"."cpf"',
+      extra: ['"Person"."email"'],
+    });
+    if (cond) and.push(cond);
   }
   if (query.active !== undefined) where.active = query.active === 'true';
   if (query.role && ROLE_FILTERS.includes(query.role)) and.push(roleExists(query.role));

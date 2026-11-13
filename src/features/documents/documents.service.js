@@ -210,6 +210,21 @@ async function buildOfficialContext(
     });
   }
 
+  // GAVETA: a concessão (proprietário) e a foto moram no BLOCO/jazigo pai.
+  let parentGrave = null;
+  if (grave?.parentGraveId) {
+    parentGrave = await Grave.findOne({
+      where: { id: grave.parentGraveId, tenantId },
+      attributes: ['id', 'code', 'photoUrl'],
+      transaction,
+    });
+  }
+  const gavetaLabel = grave?.unitType === 'gaveta'
+    ? (parentGrave && grave.code.toUpperCase().startsWith(`${parentGrave.code}-G`.toUpperCase())
+      ? grave.code.slice(parentGrave.code.length + 2)
+      : grave.code)
+    : null;
+
   const block = grave?.lot?.street?.block || null;
   const street = grave?.lot?.street || null;
   const lot = grave?.lot || null;
@@ -220,8 +235,9 @@ async function buildOfficialContext(
   // Concessão ativa (proprietário/responsável) + person.
   let concession = null;
   if (graveId) {
+    const concessionGraveIds = parentGrave ? [graveId, parentGrave.id] : [graveId];
     concession = await Concession.findOne({
-      where: { graveId, tenantId, status: 'ativa' },
+      where: { graveId: concessionGraveIds, tenantId, status: 'ativa' },
       include: [{ model: Person, as: 'person' }],
       order: [['startDate', 'DESC']],
       transaction,
@@ -287,7 +303,7 @@ async function buildOfficialContext(
     : concession?.person || null;
 
   // Foto: da sepultura; senão do sepultado referenciado.
-  const photoUrl = grave?.photoUrl || refBurial?.deceased?.photoUrl || null;
+  const photoUrl = grave?.photoUrl || parentGrave?.photoUrl || refBurial?.deceased?.photoUrl || null;
 
   return {
     brand,
@@ -299,7 +315,7 @@ async function buildOfficialContext(
       block: blockLabel,
       street: streetLabel,
       lot: lotLabel,
-      gaveta: grave?.unitType === 'gaveta' ? grave.code : null,
+      gaveta: gavetaLabel,
       tombType: grave?.tombType,
       utilizacao: grave?.utilizacao,
       carneiraPermission: grave?.carneiraPermission,
@@ -768,10 +784,34 @@ async function list(tenantId, query) {
 // original, copiando tipo/refs; o original permanece válido. O número do
 // documento é a sua identidade: a 2ª via não gera número novo, apenas reimprime.
 async function reissue(tenantId, id, userId) {
-  const original = await Document.findOne({ where: { id, tenantId } });
-  if (!original) throw AppError.notFound('Documento não encontrado.');
+  const found = await Document.findOne({ where: { id, tenantId } });
+  if (!found) throw AppError.notFound('Documento não encontrado.');
+  // Sempre a partir da RAIZ (1ª via): a contagem de reemissões mora nela.
+  const original = found.originalDocumentId
+    ? (await Document.findOne({ where: { id: found.originalDocumentId, tenantId } })) || found
+    : found;
+
+  // DOCUMENTO OFICIAL (autorização/certidão): o PDF já é gerado NA HORA a partir
+  // do cadastro atual, com o MESMO número. A "2ª via" é só baixar de novo — não
+  // há o que gravar além do contador. Antes criava uma nova linha a cada clique:
+  // a 2ª reemissão do mesmo original colidia no índice único de numeração
+  // (falhava) e a tela passava a mostrar a via antiga como "documento atual".
+  const isOfficial = !original.templateId
+    && officialTemplates.OFFICIAL_TYPES.includes(original.documentType);
+  if (isOfficial) {
+    await original.update({ reissueCount: original.reissueCount + 1 }, { skipAudit: true });
+    audit.record({
+      action: 'emissao_documento',
+      entityType: 'Documento',
+      entityId: original.id,
+      description: `2ª via do documento ${original.formattedNumber}`,
+      newData: { reissueCount: original.reissueCount },
+    });
+    return original;
+  }
 
   const newReissueCount = original.reissueCount + 1;
+  await original.update({ reissueCount: newReissueCount }, { skipAudit: true });
   // Número RAIZ (o sequencial oficial visível), lido do formattedNumber — assim
   // a 2ª via de uma 2ª via (cujo `number` interno já é negativo) ainda deriva do
   // número original correto. Fallback para o inteiro quando não parseável.
@@ -914,16 +954,70 @@ function toResponse(doc) {
 // graveId/referenceId/documentType, o PDF sempre reflete o cadastro corrente e
 // um HTML legado salvo errado (ex.: certidão que ficou com corpo de óbito) passa
 // a sair correto — sem apagar e reemitir.
+/**
+ * Sepultura ATUAL a que o documento se refere.
+ *
+ * `document.graveId` é gravado UMA vez, na emissão. Quando o operador corrige o
+ * sepultado (jazigo 49 → 99, gaveta errada…) o sepultamento muda de sepultura,
+ * mas o documento continuava apontando a antiga — e o PDF "gerado na hora" saía
+ * com o jazigo errado e com os ocupantes do jazigo errado. A fonte de verdade é
+ * a REFERÊNCIA do documento (sepultamento/concessão/sepultado), não a cópia.
+ * Quando difere, a coluna é corrigida (auto-cura) para listas e filtros.
+ */
+async function resolveLiveGraveId(document) {
+  const { tenantId } = document;
+  let liveGraveId = null;
+
+  if (document.referenceType === 'burial' && document.referenceId) {
+    const burial = await Burial.findOne({
+      where: { id: document.referenceId, tenantId }, attributes: ['graveId', 'status', 'deceasedId'],
+    });
+    if (burial?.status === 'ativo') liveGraveId = burial.graveId;
+  } else if (document.referenceType === 'concession' && document.referenceId) {
+    const concession = await Concession.findOne({
+      where: { id: document.referenceId, tenantId }, attributes: ['graveId'],
+    });
+    liveGraveId = concession?.graveId || null;
+  }
+
+  // Autorização sem referência válida (legado / sepultamento refeito): segue o
+  // sepultado — sepultamento ativo dele, ou a sepultura atual do cadastro.
+  if (!liveGraveId && document.deceasedId && document.documentType === 'autorizacao_sepultamento') {
+    const ativo = await Burial.findOne({
+      where: { tenantId, deceasedId: document.deceasedId, status: 'ativo' },
+      attributes: ['graveId'], order: [['createdAt', 'DESC']],
+    });
+    if (ativo) liveGraveId = ativo.graveId;
+    else {
+      const dec = await Deceased.findOne({
+        where: { id: document.deceasedId, tenantId }, attributes: ['currentGraveId'],
+      });
+      liveGraveId = dec?.currentGraveId || null;
+    }
+  }
+
+  liveGraveId = liveGraveId || document.graveId;
+  if (liveGraveId && liveGraveId !== document.graveId) {
+    try {
+      await document.update({ graveId: liveGraveId }, { skipAudit: true });
+    } catch (err) {
+      console.error('[documents] auto-cura do graveId falhou:', err.message);
+    }
+  }
+  return liveGraveId;
+}
+
 async function buildDocumentHtml(document) {
   const usedOfficial = !document.templateId
     && officialTemplates.OFFICIAL_TYPES.includes(document.documentType);
   if (!usedOfficial) return null;
 
   const brand = await buildBrandContext(document.tenantId);
+  const graveId = await resolveLiveGraveId(document);
   const ctx = await buildOfficialContext({
     tenantId: document.tenantId,
     documentType: document.documentType,
-    graveId: document.graveId,
+    graveId,
     referenceType: document.referenceType,
     referenceId: document.referenceId,
     brand,

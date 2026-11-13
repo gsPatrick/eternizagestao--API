@@ -4,7 +4,7 @@ const { Op } = require('sequelize');
 const AppError = require('../../utils/app-error');
 const storage = require('../../providers/storage');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
-const { syncGraveOccupancy } = require('../burials/burials.helper');
+const { syncGraveOccupancy, assertGraveAcceptsBurial } = require('../burials/burials.helper');
 const { ensureBurialScheduleSafe } = require('../burials/burials.service');
 const {
   sequelize, Deceased, Burial, Grave, GraveStatus, Lot, Street, Block, Cemetery, Document,
@@ -126,6 +126,19 @@ async function attachResponsible(tenantId, rows) {
   });
   for (const b of burialDates) lastBurialByDeceased.set(b.deceasedId, b.lastBurialDate);
 
+  // O sepultamento ATIVO manda: é ele que a edição altera. Com o MAX de todos
+  // (inclusive exumados/transladados), corrigir a data parecia "não salvar".
+  const activeBurialByDeceased = new Map();
+  const ativos = await Burial.findAll({
+    where: { tenantId, deceasedId: { [Op.in]: deceasedIds }, status: 'ativo' },
+    attributes: ['deceasedId', 'burialDate', 'burialTime'],
+    order: [['createdAt', 'DESC']],
+    raw: true,
+  });
+  for (const b of ativos) {
+    if (!activeBurialByDeceased.has(b.deceasedId)) activeBurialByDeceased.set(b.deceasedId, b);
+  }
+
   return rows.map((r) => {
     // Preferência: responsável EXPLÍCITO do sepultado → titular da concessão →
     // declarante do último sepultamento.
@@ -138,7 +151,13 @@ async function attachResponsible(tenantId, rows) {
     // photoUrl / certidão de óbito assinados (só se locais /files/...).
     json.photoUrl = signPhoto(json.photoUrl);
     json.deathCertificateFileUrl = signPhoto(json.deathCertificateFileUrl);
-    return { ...json, responsible, lastBurialDate: lastBurialByDeceased.get(r.id) || null };
+    const ativo = activeBurialByDeceased.get(r.id);
+    return {
+      ...json,
+      responsible,
+      lastBurialDate: ativo?.burialDate || lastBurialByDeceased.get(r.id) || null,
+      lastBurialTime: ativo?.burialTime || null,
+    };
   });
 }
 
@@ -261,13 +280,21 @@ async function update(tenantId, id, data) {
   const novaSepultura = data.currentGraveId !== undefined
     && data.currentGraveId !== deceased.currentGraveId;
 
+  const sepulturaAntiga = deceased.currentGraveId;
+  let novaGrave = null;
+
   await sequelize.transaction(async (transaction) => {
     if (novaSepultura) {
       if (data.currentGraveId) {
-        const grave = await Grave.findOne({
-          where: { id: data.currentGraveId, tenantId }, transaction,
+        novaGrave = await Grave.findOne({
+          where: { id: data.currentGraveId, tenantId },
+          include: [{ model: GraveStatus, as: 'status' }],
+          transaction,
         });
-        if (!grave) throw AppError.notFound('Sepultura informada não encontrada.');
+        if (!novaGrave) throw AppError.notFound('Sepultura informada não encontrada.');
+        // Mesma validação do sepultamento (bloqueio, status, lotação) — a
+        // correção não pode enfiar um 5º sepultado num jazigo para 4.
+        await assertGraveAcceptsBurial({ grave: novaGrave, tenantId, transaction });
         campos.currentLocationType = 'sepultado';
       } else {
         campos.currentLocationType = deceased.currentLocationType;
@@ -280,7 +307,10 @@ async function update(tenantId, id, data) {
     // O sepultamento ativo acompanha a correção — senão a listagem mostraria
     // uma sepultura e o histórico outra.
     const patchBurial = {};
-    if (novaSepultura && data.currentGraveId) patchBurial.graveId = data.currentGraveId;
+    if (novaSepultura && data.currentGraveId) {
+      patchBurial.graveId = data.currentGraveId;
+      patchBurial.cemeteryId = novaGrave.cemeteryId;
+    }
     if (data.burialDate !== undefined) patchBurial.burialDate = data.burialDate;
     if (data.burialTime !== undefined) patchBurial.burialTime = data.burialTime || null;
     if (Object.keys(patchBurial).length) {
@@ -305,6 +335,15 @@ async function update(tenantId, id, data) {
           if (existente) {
             await existente.update({ ...patchBurial, status: 'ativo' }, { transaction });
           } else {
+            // burial_date é obrigatória: sem ela o INSERT falhava e a transação
+            // INTEIRA era desfeita — o "Salvar" não gravava nada, sem explicação.
+            const burialDate = patchBurial.burialDate || deceased.deathDate || null;
+            if (!burialDate) {
+              throw AppError.badRequest(
+                'Informe a data de sepultamento para vincular o sepultado à sepultura.',
+                'BURIAL_DATE_REQUIRED'
+              );
+            }
             const grave = await Grave.findOne({ where: { id: graveId, tenantId }, transaction });
             await Burial.create({
               tenantId,
@@ -312,12 +351,32 @@ async function update(tenantId, id, data) {
               graveId,
               deceasedId: id,
               status: 'ativo',
-              burialDate: patchBurial.burialDate ?? null,
+              burialDate,
               burialTime: patchBurial.burialTime ?? null,
             }, { transaction });
           }
+        } else if (patchBurial.burialDate) {
+          throw AppError.badRequest(
+            'Escolha a sepultura do sepultado para registrar a data de sepultamento.',
+            'GRAVE_REQUIRED_FOR_BURIAL_DATE'
+          );
         }
       }
+    }
+
+    if (novaSepultura) {
+      // Documentos do sepultado passam a apontar a sepultura nova (listas e
+      // filtros) — o PDF já é montado da sepultura atual, mas a coluna também
+      // precisa refletir a correção.
+      if (data.currentGraveId) {
+        await Document.update(
+          { graveId: data.currentGraveId },
+          { where: { tenantId, deceasedId: id, documentType: 'autorizacao_sepultamento' }, transaction }
+        );
+      }
+      // Ocupação das DUAS sepulturas: a antiga ganhou uma vaga, a nova perdeu.
+      if (sepulturaAntiga) await syncGraveOccupancy({ graveId: sepulturaAntiga, tenantId, transaction });
+      if (data.currentGraveId) await syncGraveOccupancy({ graveId: data.currentGraveId, tenantId, transaction });
     }
   });
 

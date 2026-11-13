@@ -5,7 +5,7 @@ const AppError = require('../../utils/app-error');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const graveEvents = require('../grave-timeline/grave-event.recorder');
 const graveStatuses = require('../grave-statuses/grave-statuses.service');
-const { assertGraveAcceptsBurial } = require('../burials/burials.helper');
+const { assertGraveAcceptsBurial, syncGraveOccupancy } = require('../burials/burials.helper');
 const { nextNumber, formatExhumation } = require('../../utils/sequence');
 const { todayISO } = require('../../utils/date-local');
 const {
@@ -166,7 +166,7 @@ async function perform(tenantId, id, data, userId) {
 
       // Translado cria um sepultamento no destino: aplica as MESMAS validações do
       // sepultamento direto (bloqueio, status, lotação, concessão ativa).
-      const { activeBurials } = await assertGraveAcceptsBurial({
+      await assertGraveAcceptsBurial({
         grave: destGrave, tenantId, transaction,
       });
 
@@ -185,11 +185,8 @@ async function perform(tenantId, id, data, userId) {
       );
       await deceased.update({ currentGraveId: destGrave.id, currentLocationType: 'sepultado' }, { transaction });
 
-      // ao atingir a capacidade, o jazigo destino passa automaticamente a "ocupada"
-      if (activeBurials + 1 >= destGrave.capacity) {
-        const occupied = await graveStatuses.resolve(tenantId, { slug: 'ocupada' });
-        await destGrave.update({ statusId: occupied.id }, { transaction });
-      }
+      // ocupação do destino pela mesma regra de capacidade efetiva
+      await syncGraveOccupancy({ grave: destGrave, tenantId, transaction });
 
       await graveEvents.record(
         {
@@ -221,15 +218,9 @@ async function perform(tenantId, id, data, userId) {
       { transaction }
     );
 
-    // sem ocupantes ativos, o jazigo de origem volta a ficar livre
-    const remaining = await Burial.count({
-      where: { tenantId, graveId: exhumation.graveId, status: 'ativo' }, transaction,
-    });
-    if (remaining === 0) {
-      const originGrave = await Grave.findOne({ where: { id: exhumation.graveId, tenantId }, transaction });
-      const free = await graveStatuses.resolve(tenantId, { slug: 'livre' });
-      if (originGrave) await originGrave.update({ statusId: free.id }, { transaction });
-    }
+    // Origem: recalcula a ocupação (antes forçava "livre" por cima até de uma
+    // interdição manual). syncGraveOccupancy preserva status manuais.
+    await syncGraveOccupancy({ graveId: exhumation.graveId, tenantId, transaction });
 
     await graveEvents.record(
       {

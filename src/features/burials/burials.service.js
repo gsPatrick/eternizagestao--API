@@ -8,7 +8,7 @@ const graveStatuses = require('../grave-statuses/grave-statuses.service');
 const delinquency = require('../delinquency/delinquency.service');
 const audit = require('../audit-logs/audit.service');
 const storage = require('../../providers/storage');
-const { assertGraveAcceptsBurial } = require('./burials.helper');
+const { assertGraveAcceptsBurial, syncGraveOccupancy } = require('./burials.helper');
 const {
   sequelize, Burial, Grave, GraveStatus, Deceased, Person, Document, Schedule,
 } = require('../../models');
@@ -81,7 +81,7 @@ async function create(tenantId, data, userId, { force, role, autoAuthorize = tru
     const skipChecks = canForce(force, role);
 
     // Validações compartilhadas do jazigo (bloqueio, status, lotação, concessão).
-    const { activeBurials } = await assertGraveAcceptsBurial({
+    await assertGraveAcceptsBurial({
       grave, tenantId, transaction, skipConcession: skipChecks,
     });
 
@@ -113,11 +113,9 @@ async function create(tenantId, data, userId, { force, role, autoAuthorize = tru
 
     await deceased.update({ currentGraveId: grave.id, currentLocationType: 'sepultado' }, { transaction });
 
-    // ao atingir a capacidade, o jazigo passa automaticamente a "ocupada"
-    if (activeBurials + 1 >= grave.capacity) {
-      const occupied = await graveStatuses.resolve(tenantId, { slug: 'ocupada' });
-      await grave.update({ statusId: occupied.id }, { transaction });
-    }
+    // Ocupação (livre/ocupada) recalculada pela MESMA regra de capacidade
+    // efetiva usada na validação — uma só porta para o status automático.
+    await syncGraveOccupancy({ grave, tenantId, transaction });
 
     await graveEvents.record(
       {

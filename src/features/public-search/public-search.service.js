@@ -3,6 +3,7 @@
 const { Op } = require('sequelize');
 const AppError = require('../../utils/app-error');
 const storage = require('../../providers/storage');
+const { inheritParentGeometry } = require('../../utils/grave-geometry');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const {
   Deceased,
@@ -56,6 +57,7 @@ function toPublic(deceased) {
           graveId: grave.id,
           graveCode: grave.code,
           unitType: grave.unitType,
+          parentGraveId: grave.parentGraveId || null, // só para herdar a geometria; removido antes de responder
           status: status
             ? { name: status.name, slug: status.slug, color: status.color || null }
             : null,
@@ -194,7 +196,7 @@ async function search(tenantId, query) {
     model: Grave,
     as: 'currentGrave',
     required: false,
-    attributes: ['id', 'code', 'unitType', 'latitude', 'longitude', 'geoPolygon', 'photoUrl'],
+    attributes: ['id', 'code', 'unitType', 'parentGraveId', 'latitude', 'longitude', 'geoPolygon', 'photoUrl'],
     include: [
       { model: Cemetery, as: 'cemetery', attributes: ['id', 'name'] },
       { model: GraveStatus, as: 'status', attributes: ['id', 'name', 'slug', 'color'] },
@@ -226,7 +228,12 @@ async function search(tenantId, query) {
     distinct: true,
   });
 
-  return { rows: rows.map(toPublic), meta: buildPageMeta(count, page, perPage) };
+  const out = rows.map(toPublic);
+  // Sepultado em GAVETA: "ver no mapa / traçar rota" usa a demarcação do bloco.
+  const burials = out.map((r) => r.burial).filter(Boolean);
+  await inheritParentGeometry(Grave, tenantId, burials);
+  burials.forEach((b) => { delete b.parentGraveId; delete b.geometryInherited; });
+  return { rows: out, meta: buildPageMeta(count, page, perPage) };
 }
 
 module.exports = { search };

@@ -303,6 +303,12 @@ async function removePath(tenantId, id) {
 async function setGraveGeometry(tenantId, graveId, { geoPolygon, latitude, longitude }) {
   const grave = await Grave.findOne({ where: { id: graveId, tenantId } });
   if (!grave) throw AppError.notFound('Sepultura não encontrada.');
+  if (grave.parentGraveId) {
+    throw AppError.badRequest(
+      'A gaveta usa a demarcação do bloco de gavetas — demarque o bloco.',
+      'DRAWER_USES_BLOCK_GEOMETRY'
+    );
+  }
   if (geoPolygon && (!Array.isArray(geoPolygon) || geoPolygon.length < 3)) {
     throw AppError.badRequest('geoPolygon deve ser um polígono [[lat,lng], ...] com 3+ pontos.', 'INVALID_POLYGON');
   }

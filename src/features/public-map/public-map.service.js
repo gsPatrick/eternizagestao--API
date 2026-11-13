@@ -57,9 +57,19 @@ async function cemeteryMap(tenantId, cemeteryId) {
 async function graveRoute(tenantId, graveId) {
   const grave = await Grave.findOne({
     where: { id: graveId, tenantId },
-    attributes: ['id', 'code', 'latitude', 'longitude', 'cemeteryId'],
+    attributes: ['id', 'code', 'latitude', 'longitude', 'cemeteryId', 'parentGraveId'],
   });
   if (!grave) throw AppError.notFound('Sepultura não encontrada.');
+  // Gaveta: o destino do GPS é o bloco de gavetas onde ela está.
+  if ((grave.latitude == null || grave.longitude == null) && grave.parentGraveId) {
+    const pai = await Grave.findOne({
+      where: { id: grave.parentGraveId, tenantId }, attributes: ['latitude', 'longitude'],
+    });
+    if (pai) {
+      grave.latitude = pai.latitude;
+      grave.longitude = pai.longitude;
+    }
+  }
   if (grave.latitude == null || grave.longitude == null) {
     throw AppError.notFound('Sepultura ainda não mapeada no GPS.', 'GRAVE_NOT_MAPPED');
   }

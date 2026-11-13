@@ -2,6 +2,8 @@
 
 const { Op } = require('sequelize');
 const AppError = require('../../utils/app-error');
+const { defaultCapacityFor } = require('../burials/burials.helper');
+const { inheritParentGeometry, hasOwnGeometry } = require('../../utils/grave-geometry');
 const { getPagination, buildPageMeta } = require('../../utils/pagination');
 const graveEvents = require('../grave-timeline/grave-event.recorder');
 const graveStatuses = require('../grave-statuses/grave-statuses.service');
@@ -290,8 +292,11 @@ async function list(tenantId, query) {
     json.photoUrl = signPhoto(g.photoUrl);
     const active = occupancyByGrave[g.id] || 0;
     json.activeBurials = active;
-    json.available = Math.max(0, (g.capacity || 0) - active);
-    json.occupancy = `${active}/${g.capacity || 0}`;
+    // capacidade efetiva: jazigo com gavetas cabe ao menos uma por gaveta
+    const cap = Math.max(g.capacity || 0, childCountByGrave[g.id] || 0);
+    json.effectiveCapacity = cap;
+    json.available = Math.max(0, cap - active);
+    json.occupancy = `${active}/${cap}`;
     json.isMapped = Boolean(g.geoPolygon);
     json.occupants = occupantsByGrave[g.id] || [];
     json.childCount = childCountByGrave[g.id] || 0;
@@ -302,6 +307,11 @@ async function list(tenantId, query) {
     json.owner = owner ? { concessionId: owner.id, person: owner.person } : null;
     return json;
   });
+
+  // Gaveta sem demarcação própria usa a do BLOCO: não aparece mais como
+  // "sem demarcação" nem pede para ser demarcada (ver utils/grave-geometry).
+  await inheritParentGeometry(Grave, tenantId, data);
+  data.forEach((j) => { if (j.geometryInherited) j.isMapped = true; });
 
   return { rows: data, meta: buildPageMeta(count, page, perPage) };
 }
@@ -366,7 +376,20 @@ async function summary(tenantId, id) {
   // ocupação total = sepultamentos ativos na própria unidade + nas gavetas filhas
   const childBurials = (grave.childGraves || []).reduce((sum, c) => sum + (c.burials?.length || 0), 0);
   const activeBurials = (grave.burials?.length || 0) + childBurials;
-  const capacity = grave.capacity || 0;
+  const capacity = Math.max(grave.capacity || 0, (grave.childGraves || []).length);
+
+  // Gaveta: a geometria exibida (e a âncora do GPS) é a do bloco pai.
+  if (grave.parentGraveId && !hasOwnGeometry(grave)) {
+    const [herdada] = await inheritParentGeometry(Grave, tenantId, [{
+      parentGraveId: grave.parentGraveId, geoPolygon: null, latitude: null, longitude: null,
+    }]);
+    if (herdada.geometryInherited) {
+      grave.setDataValue('geoPolygon', herdada.geoPolygon);
+      grave.setDataValue('latitude', herdada.latitude);
+      grave.setDataValue('longitude', herdada.longitude);
+      grave.setDataValue('geometryInherited', true);
+    }
+  }
   return {
     grave,
     occupancy: { capacity, activeBurials, available: Math.max(0, capacity - activeBurials) },
@@ -565,6 +588,14 @@ async function create(tenantId, data, userId) {
       graveData.code = await nextGraveCode(tenantId, lot, transaction);
     }
 
+    // Capacidade: o painel não pedia esse dado e o banco assumia 1 — todo jazigo
+    // nascia aceitando um único sepultamento. Sem valor informado, usa o padrão
+    // do tipo (jazigo/túmulo de família: 4; cova/gaveta: 1).
+    if (!(Number(graveData.capacity) > 0)) {
+      const unitType = parent ? 'gaveta' : graveData.unitType || 'cova';
+      graveData.capacity = defaultCapacityFor(unitType);
+    }
+
     let grave;
     try {
       grave = await Grave.create(
@@ -701,7 +732,29 @@ async function update(tenantId, id, data, userId) {
     campos.code = await nextGraveCode(tenantId, novoLote);
   }
 
+  const codigoAntigo = grave.code;
   await grave.update(campos);
+
+  // GAVETAS acompanham o bloco: o código da gaveta é "<código do bloco>-G<n>" e
+  // ela mora no mesmo lote. Corrigir o bloco deixava as gavetas com o código e o
+  // lote antigos — documento e listagem continuavam mostrando a referência velha.
+  if (grave.code !== codigoAntigo || campos.lotId) {
+    const filhas = await Grave.findAll({ where: { tenantId, parentGraveId: grave.id } });
+    for (const g of filhas) {
+      const patch = {};
+      const numero = drawerNumber(g.code, codigoAntigo);
+      if (grave.code !== codigoAntigo && numero) patch.code = drawerCode(grave.code, numero);
+      if (g.lotId !== grave.lotId) patch.lotId = grave.lotId;
+      if (g.cemeteryId !== grave.cemeteryId) patch.cemeteryId = grave.cemeteryId;
+      if (Object.keys(patch).length) await g.update(patch);
+    }
+  }
+
+  // Capacidade reduzida/ampliada → recalcula livre/ocupada na hora.
+  if (campos.capacity !== undefined) {
+    const { syncGraveOccupancy } = require('../burials/burials.helper');
+    await syncGraveOccupancy({ graveId: grave.id, tenantId });
+  }
 
   // PROPRIETÁRIO escolhido na edição (o dono vive em Concession, não em Grave).
   const resultadoDono = await aplicarProprietario(tenantId, grave, data, userId);

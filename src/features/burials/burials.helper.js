@@ -1,7 +1,42 @@
 'use strict';
 
 const AppError = require('../../utils/app-error');
-const { Burial, Grave, GraveStatus } = require('../../models');
+const { Burial, Deceased, Grave, GraveStatus } = require('../../models');
+
+// Capacidade padrão quando o cadastro não informa: jazigo/túmulo de família
+// recebe vários sepultamentos (3–4 gavetas internas); cova e gaveta, um.
+const DEFAULT_CAPACITY_BY_TYPE = { jazigo: 4, tumulo: 4, outro: 1, cova: 1, gaveta: 1 };
+
+function defaultCapacityFor(unitType) {
+  return DEFAULT_CAPACITY_BY_TYPE[unitType] || 1;
+}
+
+/**
+ * Sepultamentos ATIVOS que realmente ocupam o jazigo. Ignora os de sepultados
+ * EXCLUÍDOS: antes da correção da exclusão, apagar um sepultado deixava o
+ * sepultamento "ativo" para trás — e esse fantasma seguia contando lotação,
+ * fazendo o jazigo recusar sepultamentos ("sem capacidade") sem ninguém dentro.
+ */
+function countActiveBurials({ tenantId, graveId, transaction }) {
+  return Burial.count({
+    where: { tenantId, graveId, status: 'ativo' },
+    include: [{ model: Deceased, as: 'deceased', attributes: [], required: true }],
+    transaction,
+  });
+}
+
+/**
+ * Capacidade EFETIVA do jazigo. Um bloco/jazigo com gavetas cadastradas cabe,
+ * no mínimo, uma por gaveta — mesmo que o campo `capacity` tenha ficado no
+ * padrão 1 (o painel nunca enviava capacidade, então TODO jazigo nascia com 1
+ * e recusava o 2º sepultamento: o "sem capacidade" que voltava para o cliente).
+ */
+async function effectiveCapacity({ grave, tenantId, transaction }) {
+  const base = Number(grave.capacity) || defaultCapacityFor(grave.unitType);
+  if (grave.unitType === 'gaveta' || grave.parentGraveId) return base;
+  const drawers = await Grave.count({ where: { tenantId, parentGraveId: grave.id }, transaction });
+  return Math.max(base, drawers);
+}
 const graveStatuses = require('../grave-statuses/grave-statuses.service');
 
 /**
@@ -40,14 +75,18 @@ async function assertGraveAcceptsBurial({ grave, tenantId, transaction } = {}) {
     throw new AppError(`Status '${grave.status?.name}' não permite sepultamento.`, 422, 'STATUS_FORBIDS_BURIAL');
   }
 
-  const activeBurials = await Burial.count({
-    where: { tenantId, graveId: grave.id, status: 'ativo' }, transaction,
-  });
-  if (activeBurials >= grave.capacity) {
-    throw new AppError('Sepultura sem capacidade disponível.', 422, 'GRAVE_FULL');
+  const activeBurials = await countActiveBurials({ tenantId, graveId: grave.id, transaction });
+  const capacity = await effectiveCapacity({ grave, tenantId, transaction });
+  if (activeBurials >= capacity) {
+    throw new AppError(
+      `Sepultura sem capacidade disponível (${activeBurials} de ${capacity} ocupada(s)). `
+      + 'Se o jazigo comporta mais sepultamentos, ajuste a capacidade no cadastro da sepultura.',
+      422,
+      'GRAVE_FULL'
+    );
   }
 
-  return { activeBurials };
+  return { activeBurials, capacity };
 }
 
 /**
@@ -86,10 +125,8 @@ async function syncGraveOccupancy({ grave, graveId, tenantId, transaction, recla
   const AUTO = new Set(['livre', 'ocupada', ...reclaimFrom]);
   if (currentSlug && !AUTO.has(currentSlug)) return; // status manual: não mexe
 
-  const capacity = g.capacity || 1;
-  const active = await Burial.count({
-    where: { tenantId, graveId: g.id, status: 'ativo' }, transaction,
-  });
+  const capacity = await effectiveCapacity({ grave: g, tenantId, transaction });
+  const active = await countActiveBurials({ tenantId, graveId: g.id, transaction });
 
   const alvo = active >= capacity ? 'ocupada' : 'livre';
   if (currentSlug === alvo) return; // já está certo
@@ -98,4 +135,10 @@ async function syncGraveOccupancy({ grave, graveId, tenantId, transaction, recla
   await g.update({ statusId: status.id }, { transaction });
 }
 
-module.exports = { assertGraveAcceptsBurial, syncGraveOccupancy };
+module.exports = {
+  assertGraveAcceptsBurial,
+  syncGraveOccupancy,
+  effectiveCapacity,
+  countActiveBurials,
+  defaultCapacityFor,
+};

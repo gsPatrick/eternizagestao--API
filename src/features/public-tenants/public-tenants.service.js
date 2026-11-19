@@ -3,6 +3,7 @@
 const { Op } = require('sequelize');
 const { Tenant, Cemetery, Schedule, Chapel, Deceased, Grave } = require('../../models');
 const storage = require('../../providers/storage');
+const { readSocial } = require('../../utils/tenant-social');
 const { startOfTodayInTZ, combineLocalDateTime } = require('../../utils/date-local');
 
 // Logo local (/files/...) → URL assinada (TTL longo, branding); http externa passa direto.
@@ -10,8 +11,10 @@ function signLogo(logoUrl) {
   return logoUrl ? storage.signedUrl(logoUrl, { ttlSeconds: 604800 }) : logoUrl;
 }
 
-// Serialização PÚBLICA de tenant — apenas identidade/branding para o front
-// montar a lista de cidades. Nunca expor CNPJ, contato, settings ou endereço.
+// Serialização PÚBLICA de tenant — identidade/branding para o front montar a
+// lista de cidades + os CANAIS INSTITUCIONAIS que a própria cidade cadastrou
+// para o público (rodapé do site: WhatsApp, e-mail, telefone, redes sociais).
+// Nunca expor CNPJ, endereço, settings (integrações/segredos) ou dado pessoal.
 function toPublicTenant(tenant) {
   return {
     id: tenant.id,
@@ -23,6 +26,12 @@ function toPublicTenant(tenant) {
     // Arte da página pública da cidade (quando vazia, o front usa a padrão).
     heroImageUrl: signLogo(tenant.heroImageUrl),
     footerImageUrl: signLogo(tenant.footerImageUrl),
+    contact: {
+      whatsapp: tenant.whatsapp || null,
+      email: tenant.email || null,
+      phone: tenant.phone || null,
+      social: readSocial(tenant.settings),
+    },
   };
 }
 

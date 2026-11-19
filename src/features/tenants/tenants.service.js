@@ -9,6 +9,7 @@ const { panelLoginUrl } = require('../../utils/tenant-url');
 const { sequelize, Tenant, User } = require('../../models');
 const notifications = require('../notifications/notifications.service');
 const storage = require('../../providers/storage');
+const { normalizeSocial, readSocial } = require('../../utils/tenant-social');
 
 // Logo do tenant: formatos aceitos e teto de tamanho (upload é imagem de marca).
 const LOGO_MIME_TYPES = ['image/png', 'image/jpeg', 'image/jpg', 'image/svg+xml'];
@@ -112,6 +113,8 @@ function serialize(tenant) {
     email: t.email,
     phone: t.phone,
     whatsapp: t.whatsapp,
+    // Redes sociais da cidade (settings.social) — editadas em Configurações → Contato.
+    social: readSocial(t.settings),
     addressStreet: t.addressStreet,
     addressNumber: t.addressNumber,
     addressComplement: t.addressComplement,
@@ -419,6 +422,12 @@ async function updateOnboarding(tenantId, data = {}) {
   }
   if (data.name !== undefined && data.name !== null && data.name !== '') {
     patch.name = data.name;
+  }
+  // Redes sociais: moram em settings.social (JSONB). Objeto NOVO para o
+  // Sequelize enxergar a mudança e sem tocar nas outras chaves do settings
+  // (integrações, documentos, notificações...).
+  if (data.social !== undefined) {
+    patch.settings = { ...(tenant.settings || {}), social: normalizeSocial(data.social) };
   }
 
   const finish = data.concluir !== false;
